@@ -39,3 +39,19 @@ def test_dashboard_data_endpoint(logger_server):
     # A bogus period is rejected with a 400.
     bad = httpx.get(f"{logger_server['base_url']}/dashboard/data?period=bogus", timeout=20)
     assert bad.status_code == 400
+
+
+def test_dashboard_data_has_cache_fields(logger_server):
+    base = logger_server["base_url"]
+    for i in range(3):
+        httpx.post(base + "/api/chat", json={"model": "test-model", "messages": [{"role": "user", "content": "x"}], "stream": False}, timeout=20)
+    url = base + "/dashboard/data?period=all" + chr(38) + "cache=50"
+    r = httpx.get(url, timeout=20)
+    assert r.status_code == 200
+    data = r.json()
+    models = data["summary"]["models"]
+    assert models, "expected at least one pricing model"
+    for m in models:
+        assert "base_cost" in m and "cached_cost" in m and "savings" in m and "measured_cost" in m
+        assert m["base_cost"] >= m["cached_cost"]
+        assert abs(m["savings"] - (m["base_cost"] - m["cached_cost"])) < 1e-5

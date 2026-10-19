@@ -154,13 +154,26 @@ def aggregate(
     days = period_days(cutoff, now, records)
     models: List[Dict[str, Any]] = []
     for mp in pricing:
-        total_cost = 0.0
+        base_cost = 0.0
+        cached_cost = 0.0
+        measured_cost = 0.0
+        cached_input_tokens = 0.0
+        input_tokens_total = 0.0
         for r in records:
             itok = _num(r.get("input_tokens"))
             otok = _num(r.get("output_tokens"))
             if itok is None and otok is None:
                 continue
-            total_cost += cost_for_model(mp, itok or 0.0, otok or 0.0, cache_pct)
+            itok = itok or 0.0
+            otok = otok or 0.0
+            input_tokens_total += itok
+            base_cost += cost_for_model(mp, itok, otok, 0.0)
+            cached_cost += cost_for_model(mp, itok, otok, cache_pct)
+            cached_tok = _num(r.get("cached_input_tokens")) or 0.0
+            cached_input_tokens += cached_tok
+            frac = (cached_tok / itok) if itok > 0 else 0.0
+            measured_cost += cost_for_model(mp, itok, otok, frac * 100.0)
+        measured_cached_pct = round((cached_input_tokens / input_tokens_total * 100.0), 2) if input_tokens_total > 0 else 0.0
         models.append(
             {
                 "model": mp.model,
@@ -169,7 +182,13 @@ def aggregate(
                 "cached_input_price_per_m": mp.cached_input_price,
                 "output_price_per_m": mp.output_price,
                 "effective_date": mp.effective_date,
-                "total_cost": round(total_cost, 6),
+                "base_cost": round(base_cost, 6),
+                "cached_cost": round(cached_cost, 6),
+                "savings": round(base_cost - cached_cost, 6),
+                "measured_cost": round(measured_cost, 6),
+                "cached_input_tokens": int(cached_input_tokens),
+                "measured_cached_pct": measured_cached_pct,
+                "total_cost": round(cached_cost, 6),
             }
         )
 

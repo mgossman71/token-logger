@@ -101,3 +101,40 @@ def test_long_context_tier_applies(tmp_path):
     below = cost_for_model(tiered, threshold - 1, 100, 0)
     above = cost_for_model(tiered, threshold, 100, 0)
     assert above > below, "crossing the long-context threshold must raise the per-token rate"
+
+
+def test_cost_for_model_cached_math():
+    from app.pricing import cost_for_model_cached, load_pricing
+    pr = load_pricing(PRICING_FILE)
+    mp = [m for m in pr if m.model == "gpt-4o-mini"][0]
+    r0 = cost_for_model_cached(mp, 1000, 500, 0.0)
+    assert r0["source"] == "assumed"
+    assert abs(r0["base"] - r0["cached"]) < 1e-12
+    assert abs(r0["savings"]) < 1e-12
+    r100 = cost_for_model_cached(mp, 1000, 500, 100.0)
+    expected_cached = (1000 * mp.cached_input_price + 500 * mp.output_price) / 1e6
+    assert abs(r100["cached"] - expected_cached) < 1e-12
+    assert r100["base"] > r100["cached"]
+    r_out = cost_for_model_cached(mp, 0, 500, 100.0)
+    assert abs(r_out["base"] - r_out["cached"]) < 1e-12
+    r_m = cost_for_model_cached(mp, 1000, 500, 0.0, cached_input_tokens=1000)
+    assert r_m["source"] == "measured"
+    assert abs(r_m["cached"] - r100["cached"]) < 1e-12
+
+
+def test_aggregate_emits_cache_fields(tmp_path):
+    from app.pricing import load_pricing
+    dd = str(tmp_path / "data")
+    os.makedirs(dd, exist_ok=True)
+    with open(os.path.join(dd, "usage.jsonl"), "w", encoding="utf-8") as f:
+        for i in range(2):
+            rec = {"request_id": "r%d" % i, "timestamp": _now_iso(), "backend": "rtx5090", "model": "qwen3.8:27b", "endpoint": "/api/chat", "http_status": 200, "status": "completed", "input_tokens": 1000, "output_tokens": 500, "total_tokens": 1500, "cached_input_tokens": 400}
+            f.write(json.dumps(rec) + "\n")
+    pr = load_pricing(PRICING_FILE)
+    s = report_mod.aggregate(report_mod.load_usage(dd), pr, 0.0, datetime.now(timezone.utc), None)
+    mini = [m for m in s["models"] if m["model"] == "gpt-4o-mini"][0]
+    assert mini["base_cost"] > 0
+    assert abs(mini["savings"] - (mini["base_cost"] - mini["cached_cost"])) < 1e-9
+    assert mini["measured_cached_pct"] == 40.0
+    assert abs(mini["cached_cost"] - mini["base_cost"]) < 1e-9
+    assert mini["base_cost"] > mini["measured_cost"]

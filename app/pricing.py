@@ -131,3 +131,31 @@ def cost_for_tokens(
         mp.model: cost_for_model(mp, input_tokens, output_tokens, cache_pct)
         for mp in pricing
     }
+
+
+def cost_for_model_cached(
+    mp: ModelPricing,
+    input_tokens: float,
+    output_tokens: float,
+    cache_pct: float = 0.0,
+    cached_input_tokens: Optional[float] = None,
+) -> Dict[str, Any]:
+    # base = no caching; cached = measured (cached_input_tokens) or assumed
+    # (cache_pct) fraction of input billed at the cached-input price. Output
+    # tokens are never discounted. Reuses cost_for_model (tier-aware).
+    base = cost_for_model(mp, input_tokens, output_tokens, 0.0)
+    if cached_input_tokens is not None:
+        in_tok = max(0.0, float(input_tokens))
+        cached_tok = max(0.0, min(float(cached_input_tokens), in_tok))
+        frac = (cached_tok / in_tok) if in_tok > 0 else 0.0
+        cached = cost_for_model(mp, input_tokens, output_tokens, frac * 100.0)
+        source = "measured"
+    else:
+        cached = cost_for_model(mp, input_tokens, output_tokens, cache_pct)
+        source = "assumed"
+    return {
+        "base": base,
+        "cached": cached,
+        "savings": base - cached,
+        "source": source,
+    }

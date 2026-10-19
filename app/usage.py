@@ -66,6 +66,7 @@ def extract_usage(payload: Optional[Dict[str, Any]]) -> Dict[str, Optional[float
 
     return {
         "input_tokens": input_tokens,
+        "cached_input_tokens": _num(p.get("cached_input_tokens")),
         "output_tokens": output_tokens,
         "total_tokens": total_tokens,
         "prompt_tokens_per_second": _rate(input_tokens, prompt_eval_duration),
