@@ -1,7 +1,7 @@
-# Ollama Token Logger & OpenAI Cost Estimator
+# Ollama Token Logger & Cloud Cost Estimator (OpenAI + Anthropic)
 
 A transparent, asynchronous Ollama proxy that records real token usage per
-request and estimates what the same workload would cost on the OpenAI API.
+request and estimates what the same workload would cost on cloud APIs (OpenAI + Anthropic).
 Runs entirely through Docker Compose, sits behind your existing HAProxy, and
 preserves Ollama's native API exactly — including streaming, Qwen `thinking`
 reasoning, and tool calls.
@@ -34,8 +34,9 @@ Cline / other AI clients
 - **File-based storage**: one JSON Lines record per inference request at
   `data/usage.jsonl`, with size-based rotation. Logging failures never break
   inference.
-- **OpenAI cost estimation**: config-driven pricing + a CLI reporter with
-  cache-hit assumptions, and the estimated cost of the actual usage in the selected window (no projection).
+- **Cloud cost estimation (OpenAI + Anthropic)**: config-driven pricing + a CLI
+  reporter with cache-hit assumptions, showing the estimated cost of the actual
+  usage in the selected window (no projection).
 - **Multi-backend ready**: one Compose instance per Ollama server. RTX 5090 is
   on by default; the AMD R9700 instance is a one-line, no-code-change addition.
 
@@ -171,9 +172,10 @@ port — no extra services, no build step, works offline:
     http://<host>:11435/                                   # the page (also /dashboard)
     http://<host>:11435/dashboard/data?period=30d&cache=25 # JSON (for scripting)
 
-It shows request counts, token totals, average speed, a tokens-per-day and a
-cost-per-day chart, per-backend utilisation, the estimated cost per configured
-model, and the most recent requests. The numbers are computed with the exact
+It shows the key usage blocks on top (requests, input / output / total tokens,
+average speed), then what that usage would cost on each configured OpenAI and
+Anthropic model (grouped by provider, cheapest highlighted), and the most recent
+requests. The numbers are computed with the exact
 same logic as `report.py`. It exposes only aggregate token counts and cost
 *estimates* — no prompt/response content is ever logged. Because it rides on the
 proxy port it is reachable wherever the proxy is; set `DASHBOARD_ENABLED=0` to
@@ -181,10 +183,10 @@ turn it off and restore pure pass-through behaviour.
 
 ## Pricing configuration
 
-Prices live in `pricing.json` (one file, no code). Each model entry supports
-input / cached-input / output price per 1M tokens, an effective date, and
-optional long-context tiers. **Verify these against
-https://openai.com/api/pricing/ — they are a starting point, not gospel.**
+Prices live in `pricing.json` (one file, no code). Each model entry supports a
+`provider` (OpenAI or Anthropic), input / cached-input / output price per 1M
+tokens, an effective date, and optional long-context tiers. **Verify these against
+https://openai.com/api/pricing/ and https://docs.anthropic.com/en/docs/about-claude/pricing — they are a starting point, not gospel.**
 
 Cost model per request, per model:
 
@@ -194,7 +196,7 @@ cost = ( input_tokens  * (1 - cache) * input_price
        + output_tokens * output_price ) / 1_000_000
 ```
 
-> **These are estimates, not billing predictions.** Ollama and OpenAI differ in
+> **These are estimates, not billing predictions.** Ollama and OpenAI/Anthropic differ in
 > tokenization, how reasoning tokens are counted, prompt-caching behaviour, and
 > long-context pricing. Treat them as order-of-magnitude comparisons.
 
@@ -246,11 +248,11 @@ app/            Starlette + httpx proxy (config, proxy, storage, usage, pricing)
   proxy.py      transparent forward, streaming, stat extraction, handlers
   storage.py    JSONL append + size-based rotation (async, thread-offloaded)
   usage.py      token/stat extraction from Ollama payloads (no invented data)
-  pricing.py    OpenAI pricing load + cost math
+  pricing.py    cloud (OpenAI + Anthropic) pricing load + cost math
 report.py       CLI reporter (text / JSON / CSV)
 tests/          13 offline suites + 4 live integration tests (opt-in)
 deploy/         deploy.sh + exact HAProxy change snippets
-pricing.json    OpenAI price table (edit me)
+pricing.json    OpenAI + Anthropic price table (edit me)
 ```
 
 ## Troubleshooting

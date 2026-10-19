@@ -30,6 +30,7 @@ class ModelPricing:
     input_price: float
     cached_input_price: float
     output_price: float
+    provider: str = ""
     effective_date: str = ""
     note: str = ""
     # list of {"min_tokens": int, "input_price": float,
@@ -42,6 +43,7 @@ class ModelPricing:
             "input_price": self.input_price,
             "cached_input_price": self.cached_input_price,
             "output_price": self.output_price,
+            "provider": self.provider,
             "effective_date": self.effective_date,
             "note": self.note,
             "long_context_tiers": self.long_context_tiers,
@@ -80,6 +82,7 @@ def load_pricing(path: str) -> List[ModelPricing]:
                 input_price=_f(m.get("input_price")),
                 cached_input_price=_f(m.get("cached_input_price")),
                 output_price=_f(m.get("output_price")),
+                provider=str(m.get("provider", "")),
                 effective_date=str(m.get("effective_date", "")),
                 note=str(m.get("note", "")),
                 long_context_tiers=tiers,

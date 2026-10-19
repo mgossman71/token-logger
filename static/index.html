@@ -44,6 +44,10 @@ tr:last-child td{border-bottom:none}
 footer{margin-top:24px;color:var(--muted);font-size:12px}
 .empty{color:var(--muted);font-size:13px;padding:8px 0}
 .error{background:rgba(255,107,107,.1);border:1px solid rgba(255,107,107,.3);color:#ffb3b3;padding:10px 12px;border-radius:8px;font-size:13px;margin-bottom:16px}
+.prov{font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin:14px 0 6px}
+.prov:first-of-type{margin-top:2px}
+tr.cheapest td{background:rgba(55,208,160,.08)}
+.tag{display:inline-block;margin-left:8px;padding:1px 8px;border-radius:999px;font-size:11px;font-weight:600;background:rgba(55,208,160,.15);color:var(--accent2)}
 </style>
 </head>
 <body>
@@ -63,9 +67,6 @@ footer{margin-top:24px;color:var(--muted);font-size:12px}
           <option value="all" selected>All time</option>
         </select>
       </label>
-      <label>Cache hit %
-        <input id="cache" type="number" min="0" max="100" value="0" style="width:70px">
-      </label>
       <button id="refresh">Refresh</button>
     </div>
   </header>
@@ -75,26 +76,9 @@ footer{margin-top:24px;color:var(--muted);font-size:12px}
   <div class="grid" id="kpis"></div>
 
   <div class="panel">
-    <h2>Tokens per day</h2>
-    <div class="legend"><span><i class="dot" style="background:#4f8cff"></i> Input</span><span><i class="dot" style="background:#37d0a0"></i> Output</span></div>
-    <div id="tokChart"></div>
-  </div>
-
-  <div class="panel">
-    <h2>Cost by day — your actual usage <span class="muted small">(cheapest → most expensive configured model; these days sum to the total)</span></h2>
-    <div class="legend"><span><i class="dot" style="background:#f5b942"></i> Low</span><span><i class="dot" style="background:#ff6b6b"></i> High</span></div>
-    <div id="costChart"></div>
-  </div>
-
-  <div class="cols">
-    <div class="panel" style="margin-bottom:0">
-      <h2>Backend utilisation</h2>
-      <div id="backendTable"></div>
-    </div>
-    <div class="panel" style="margin-bottom:0">
-      <h2>Estimated cost by model</h2>
-      <div id="costTable"></div>
-    </div>
+    <h2>What this usage costs on AI services <span class="muted small">(OpenAI + Anthropic · for the selected period)</span></h2>
+    <div class="small muted" id="costSummary"></div>
+    <div id="costTable" style="margin-top:12px"></div>
   </div>
 
   <div class="panel">
@@ -119,52 +103,13 @@ function fmtRate(n){ if(n==null||isNaN(n)) return 'n/a'; return Number(n).toFixe
 function fmtDur(n){ if(n==null||isNaN(n)) return 'n/a'; return Number(n).toFixed(2); }
 function statusText(c){ if(!c) return ''; return Object.keys(c).map(function(k){return k+' '+c[k];}).join(' · '); }
 
-function niceMax(v){
-  if(v<=0||!isFinite(v)) return 1;
-  const p=Math.pow(10,Math.floor(Math.log10(v))); const d=v/p;
-  let m; if(d<=1)m=1; else if(d<=2)m=2; else if(d<=2.5)m=2.5; else if(d<=5)m=5; else m=10;
-  return m*p;
-}
-
-function drawLineChart(containerId, labels, series, opts){
-  opts=opts||{};
-  const el=$(containerId);
-  const W=760,H=240,pad={l:54,r:18,t:14,b:34};
-  const n=labels.length;
-  if(!n){ el.innerHTML='<div class="empty">No data.</div>'; return; }
-  const yMax=niceMax(Math.max(1e-9, ...series.map(function(s){return Math.max.apply(null,s.values.concat([0]));})));
-  const x=function(i){ return n<=1 ? (pad.l+(W-pad.l-pad.r)/2) : pad.l + i*(W-pad.l-pad.r)/(n-1); };
-  const y=function(v){ return H-pad.b - (v/yMax)*(H-pad.t-pad.b); };
-  let svg='<svg class="chart" viewBox="0 0 '+W+' '+H+'" role="img">';
-  for(let g=0;g<=4;g++){
-    const val=yMax*g/4, yy=y(val);
-    svg+='<line x1="'+pad.l+'" y1="'+yy+'" x2="'+(W-pad.r)+'" y2="'+yy+'" stroke="#1f2a3a" stroke-width="1"/>';
-    svg+='<text x="'+(pad.l-8)+'" y="'+(yy+4)+'" fill="#8a97a8" font-size="11" text-anchor="end">'+fmtCompact(val)+'</text>';
-  }
-  const every=Math.max(1,Math.ceil(n/6));
-  for(let i=0;i<n;i+=every){
-    svg+='<text x="'+x(i)+'" y="'+(H-pad.b+18)+'" fill="#8a97a8" font-size="11" text-anchor="middle">'+esc(labels[i])+'</text>';
-  }
-  series.forEach(function(s){
-    let line='';
-    s.values.forEach(function(v,i){ line+=(i?'L':'M')+x(i).toFixed(1)+' '+y(v).toFixed(1)+' '; });
-    if(opts.area!==false){
-      const area=line+'L '+x(n-1).toFixed(1)+' '+y(0).toFixed(1)+' L '+x(0).toFixed(1)+' '+y(0).toFixed(1)+' Z';
-      svg+='<path d="'+area+'" fill="'+s.color+'" opacity="0.10"/>';
-    }
-    svg+='<path d="'+line+'" fill="none" stroke="'+s.color+'" stroke-width="2"/>';
-    s.values.forEach(function(v,i){ svg+='<circle cx="'+x(i).toFixed(1)+'" cy="'+y(v).toFixed(1)+'" r="2.5" fill="'+s.color+'"/>'; });
-  });
-  svg+='</svg>';
-  el.innerHTML=svg;
-}
 async function load(){
-  const period=$('period').value, cache=Number($('cache').value||0);
+  const period=$('period').value;
   $('error').style.display='none';
   $('sub').textContent='Loading…';
   let data;
   try{
-    const r=await fetch('/dashboard/data?period='+encodeURIComponent(period)+'&cache='+cache,{cache:'no-store'});
+    const r=await fetch('/dashboard/data?period='+encodeURIComponent(period)+'&cache=0',{cache:'no-store'});
     if(!r.ok) throw new Error('HTTP '+r.status);
     data=await r.json();
   }catch(e){
@@ -178,11 +123,10 @@ async function load(){
 
 function render(data){
   const s=data.summary||{}, tok=s.tokens||{input:0,output:0,total:0};
-  const models=(s.models||[]).slice().sort(function(a,b){return a.total_cost-b.total_cost;});
-  const lo=models.length?models[0]:null, hi=models.length?models[models.length-1]:null;
   const backends=[].concat(new Set((s.backends||[]).map(function(b){return b.backend;})));
   $('backend').textContent=backends.length?('('+backends.join(', ')+')'):'';
-  $('sub').textContent=(s.requests||0)+' requests'+(data.series&&data.series.length?(' · data: '+data.series[0].day+' → '+data.series[data.series.length-1].day+' ('+data.series.length+' days)'):'')+' · cache '+(data.cache_assumption_pct||0)+'%';
+  const periodLabel=({today:'today','7d':'last 7 days','30d':'last 30 days','90d':'last 90 days',all:'all time'})[$('period').value]||$('period').value;
+  $('sub').textContent=(s.requests||0)+' requests · '+periodLabel+(data.as_of?(' · as of '+String(data.as_of).replace('T',' ').slice(0,19)+' UTC'):'');
 
   $('kpis').innerHTML=[
     ['Requests',fmtInt(s.requests),statusText(s.status_counts)],
@@ -190,37 +134,9 @@ function render(data){
     ['Output tokens',fmtCompact(tok.output),fmtInt(tok.output)],
     ['Total tokens',fmtCompact(tok.total),fmtInt(tok.total)],
     ['Avg out speed',(s.avg_output_tokens_per_second!=null?fmtRate(s.avg_output_tokens_per_second):'n/a')+' tok/s',(s.avg_prompt_tokens_per_second!=null?fmtRate(s.avg_prompt_tokens_per_second)+' tok/s in':'in n/a')],
-    ['Est. cost of your usage',lo?fmtMoney(lo.total_cost):'n/a',hi?('→ '+fmtMoney(hi.total_cost)):''],
   ].map(function(k){return '<div class="card"><div class="k">'+k[0]+'</div><div class="v num">'+k[1]+'</div><div class="s">'+esc(k[2]||'')+'</div></div>';}).join('');
 
-  const series=data.series||[], labels=series.map(function(p){return p.day.slice(5);});
-  if(series.length===0){
-    $('tokChart').innerHTML='<div class="empty">No data in this period.</div>';
-    $('costChart').innerHTML='<div class="empty">No data in this period.</div>';
-  }else{
-    drawLineChart('tokChart',labels,[
-      {name:'Input',color:'#4f8cff',values:series.map(function(p){return p.input_tokens;})},
-      {name:'Output',color:'#37d0a0',values:series.map(function(p){return p.output_tokens;})},
-    ]);
-    drawLineChart('costChart',labels,[
-      {name:'Low',color:'#f5b942',values:series.map(function(p){return p.cost_low;})},
-      {name:'High',color:'#ff6b6b',values:series.map(function(p){return p.cost_high;})},
-    ],{area:false});
-  }
-
-  const bt=s.backends||[];
-  $('backendTable').innerHTML=bt.length
-    ?'<table><thead><tr><th>Backend</th><th>Req</th><th>In</th><th>Out</th><th>Total</th></tr></thead><tbody>'+
-      bt.map(function(b){return '<tr><td>'+esc(b.backend)+'</td><td class="num">'+fmtInt(b.requests)+'</td><td class="num">'+fmtCompact(b.input_tokens)+'</td><td class="num">'+fmtCompact(b.output_tokens)+'</td><td class="num">'+fmtCompact(b.total_tokens)+'</td></tr>';}).join('')+
-      '</tbody></table>'
-    :'<div class="empty">No backends.</div>';
-
-  const ct=(s.models||[]).slice().sort(function(a,b){return b.total_cost-a.total_cost;});
-  $('costTable').innerHTML=ct.length
-    ?'<table><thead><tr><th>Model</th><th>In $/M</th><th>Out $/M</th><th>Cost (this window)</th></tr></thead><tbody>'+
-      ct.map(function(m){return '<tr><td>'+esc(m.model)+'</td><td class="num">'+(m.input_price_per_m!=null?Number(m.input_price_per_m).toFixed(3):'n/a')+'</td><td class="num">'+(m.output_price_per_m!=null?Number(m.output_price_per_m).toFixed(3):'n/a')+'</td><td class="num">'+fmtMoney(m.total_cost)+'</td></tr>';}).join('')+
-      '</tbody></table>'
-    :'<div class="empty">No models configured.</div>';
+  renderCost(s);
 
   const rc=data.recent||[];
   $('recentCount').textContent=rc.length?('('+rc.length+' shown)'):'';
@@ -233,12 +149,46 @@ function render(data){
       '</tbody></table>'
     :'<div class="empty">No requests in this period.</div>';
 
-  $('footer').textContent='Estimates only — Ollama vs OpenAI differ in tokenizer, reasoning-token accounting, prompt caching and long-context pricing. Pricing source: '+(data.source||'https://platform.openai.com/docs/pricing');
+  $('footer').textContent='Estimates only — Ollama vs OpenAI/Anthropic differ in tokenizer, reasoning-token accounting, prompt caching and long-context pricing. Costs are for the usage in the selected period (no daily/monthly projection). Pricing source: '+(data.source||'https://platform.openai.com/docs/pricing');
+}
+
+function renderCost(s){
+  const models=s.models||[];
+  if(!models.length){
+    $('costSummary').textContent='No models configured.';
+    $('costTable').innerHTML='<div class="empty">No models configured.</div>';
+    return;
+  }
+  const order={openai:0,anthropic:1};
+  const sorted=models.slice().sort(function(a,b){return (order[a.provider]!=null?order[a.provider]:9)-(order[b.provider]!=null?order[b.provider]:9) || (a.total_cost-b.total_cost);});
+  const byCost=models.slice().sort(function(a,b){return a.total_cost-b.total_cost;});
+  const cheapest=byCost[0], most=byCost[byCost.length-1];
+  $('costSummary').textContent=(s.requests||0)+' requests · '+fmtCompact((s.tokens||{}).input)+' in · '+fmtCompact((s.tokens||{}).output)+' out  →  cheapest '+cheapest.model+' '+fmtMoney(cheapest.total_cost)+' · most expensive '+most.model+' '+fmtMoney(most.total_cost);
+  const label={openai:'OpenAI',anthropic:'Anthropic'};
+  const providers=['openai','anthropic'];
+  let html='';
+  providers.forEach(function(p){
+    const rows=sorted.filter(function(m){return m.provider===p;});
+    if(!rows.length) return;
+    html+='<div class="prov">'+(label[p]||p)+'</div>'
+      +'<table><thead><tr><th>Model</th><th>In $/M</th><th>Out $/M</th><th>Cost (this window)</th></tr></thead><tbody>'
+      +rows.map(function(m){
+        const isCheapest=(m.model===cheapest.model);
+        return '<tr'+(isCheapest?' class="cheapest"':'')+'><td>'+esc(m.model)+(isCheapest?' <span class="tag">cheapest</span>':'')+'</td><td class="num">'+(m.input_price_per_m!=null?Number(m.input_price_per_m).toFixed(3):'n/a')+'</td><td class="num">'+(m.output_price_per_m!=null?Number(m.output_price_per_m).toFixed(3):'n/a')+'</td><td class="num">'+fmtMoney(m.total_cost)+'</td></tr>';
+      }).join('')
+      +'</tbody></table>';
+  });
+  const other=sorted.filter(function(m){return providers.indexOf(m.provider)<0;});
+  if(other.length){
+    html+='<table><thead><tr><th>Model</th><th>In $/M</th><th>Out $/M</th><th>Cost (this window)</th></tr></thead><tbody>'
+      +other.map(function(m){return '<tr><td>'+esc(m.model)+'</td><td class="num">'+(m.input_price_per_m!=null?Number(m.input_price_per_m).toFixed(3):'n/a')+'</td><td class="num">'+(m.output_price_per_m!=null?Number(m.output_price_per_m).toFixed(3):'n/a')+'</td><td class="num">'+fmtMoney(m.total_cost)+'</td></tr>';}).join('')
+      +'</tbody></table>';
+  }
+  $('costTable').innerHTML=html;
 }
 
 $('refresh').addEventListener('click',load);
 $('period').addEventListener('change',load);
-$('cache').addEventListener('change',load);
 window.addEventListener('load',load);
 </script>
 </body>

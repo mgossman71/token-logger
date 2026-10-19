@@ -33,6 +33,8 @@ def test_dashboard_data_endpoint(logger_server):
     assert data["recent"], "at least one recent record should be present"
     assert data["recent"][0]["request_id"]
     assert any(m["model"] for m in s["models"])
+    providers = {m["provider"] for m in s["models"]}
+    assert "openai" in providers and "anthropic" in providers
 
     # A bogus period is rejected with a 400.
     bad = httpx.get(f"{logger_server['base_url']}/dashboard/data?period=bogus", timeout=20)

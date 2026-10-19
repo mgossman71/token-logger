@@ -47,6 +47,13 @@ def test_report_json_math(tmp_path):
     mini = [m for m in data["models"] if m["model"] == "gpt-4o-mini"][0]
     expected = 3 * (1000 * 0.15 + 500 * 0.60) / 1e6
     assert abs(mini["total_cost"] - expected) < 1e-9
+    assert mini["provider"] == "openai"
+
+    # Anthropic models are present, labelled, and priced (claude-sonnet-5.5: $2 in / $10 out).
+    sonnet = [m for m in data["models"] if m["model"] == "claude-sonnet-5.5"][0]
+    assert sonnet["provider"] == "anthropic"
+    expected_sonnet = 3 * (1000 * 2.0 + 500 * 10.0) / 1e6
+    assert abs(sonnet["total_cost"] - expected_sonnet) < 1e-9
 
 
 def test_cache_assumption_reduces_cost(tmp_path):

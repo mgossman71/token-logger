@@ -4,8 +4,8 @@
 Reads the JSONL usage log (usage.jsonl + rotated usage.jsonl.N) and reports:
   * request counts, token totals, average generation speed
   * backend utilisation
-  * estimated OpenAI API cost per configured model
-  * projected monthly cost
+  * estimated cloud API cost (OpenAI + Anthropic) per configured model, for the
+    actual usage in the selected window (no daily/monthly projection)
 
 Examples:
     python report.py --period today
@@ -164,6 +164,7 @@ def aggregate(
         models.append(
             {
                 "model": mp.model,
+                "provider": mp.provider,
                 "input_price_per_m": mp.input_price,
                 "cached_input_price_per_m": mp.cached_input_price,
                 "output_price_per_m": mp.output_price,
@@ -187,8 +188,8 @@ def aggregate(
         "backends": list(backends.values()),
         "models": models,
         "note": (
-            "Estimates only. Ollama vs OpenAI tokenizer, reasoning-token "
-            "accounting, prompt caching and long-context pricing differ."
+            "Estimates only. Ollama vs OpenAI/Anthropic differ in tokenizer, "
+            "reasoning-token accounting, prompt caching and long-context pricing."
         ),
     }
 
@@ -208,7 +209,7 @@ def format_text(summary: Dict[str, Any]) -> str:
     L: List[str] = []
     tok = summary["tokens"]
     L.append("=" * 62)
-    L.append("Ollama Token Usage  ->  Estimated OpenAI API Cost")
+    L.append("Ollama Token Usage  ->  Estimated cloud API cost (OpenAI + Anthropic)")
     L.append("=" * 62)
     cov = summary["period"]
     L.append(
@@ -231,13 +232,17 @@ def format_text(summary: Dict[str, Any]) -> str:
             f"out={_fmt_int(b['output_tokens'])}  total={_fmt_int(b['total_tokens'])}   {b['backend']}"
         )
     L.append("")
-    L.append("Estimated OpenAI API cost (actual usage in this window - no projection)")
-    L.append("-" * 62)
-    L.append(f"  {'model':<26} {'in $/M':>9} {'out $/M':>9} {'cost (window)':>14}")
-    for m in summary["models"]:
+    L.append("Estimated cloud API cost for this usage (OpenAI + Anthropic) - no projection")
+    L.append("-" * 74)
+    L.append(f"  {'model':<22} {'provider':<11} {'in $/M':>9} {'out $/M':>9} {'cost (window)':>14}")
+    _prov_order = {"openai": 0, "anthropic": 1}
+    for m in sorted(
+        summary["models"],
+        key=lambda x: (_prov_order.get(x.get("provider", ""), 99), x["total_cost"]),
+    ):
         L.append(
-            f"  {m['model']:<26} {m['input_price_per_m']:>9.3f} {m['output_price_per_m']:>9.3f} "
-            f"${m['total_cost']:>13,.2f}"
+            f"  {m['model']:<22} {m.get('provider', ''):<11} {m['input_price_per_m']:>9.3f} "
+            f"{m['output_price_per_m']:>9.3f} ${m['total_cost']:>13,.2f}"
         )
     L.append("")
     L.append("Note: " + summary["note"])
