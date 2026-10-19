@@ -1,0 +1,76 @@
+name: ollama-token-logger
+
+# =============================================================================
+# Ollama Token Logger
+#
+#   logger-5090 : RTX 5090 backend  -> listens on 11435 (always on)
+#   logger-amd  : AMD R9700 backend -> listens on 11436 (enabled with profile "amd")
+#
+# Enable the second (AMD) instance later with:
+#   OLLAMA_BACKEND_URL_AMD=http://<amd-ip>:11434 \
+#   BACKEND_NAME_AMD=amd-r9700 \
+#   docker compose --profile amd up -d
+# =============================================================================
+
+x-common: &common
+  image: ollama-token-logger:latest
+  build:
+    context: .
+    dockerfile: Dockerfile
+  restart: unless-stopped
+  init: true
+  env_file:
+    - .env
+  networks:
+    - ollama-net
+  logging:
+    driver: json-file
+    options:
+      max-size: "5m"
+      max-file: "3"
+
+services:
+  logger-5090:
+    <<: *common
+    container_name: ollama-token-logger-5090
+    environment:
+      BACKEND_NAME: ${BACKEND_NAME:-rtx5090}
+      OLLAMA_BACKEND_URL: ${OLLAMA_BACKEND_URL:-http://10.0.0.140:11434}
+      LISTEN_PORT: "11435"
+      DATA_DIR: /data
+    ports:
+      - "11435:11435"
+    volumes:
+      - ./data:/data
+    healthcheck:
+      test: ["CMD", "python", "/app/healthcheck.py"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  # Optional second backend (AMD R9700). Off by default; enable with:
+  #   docker compose --profile amd up -d
+  logger-amd:
+    <<: *common
+    profiles: ["amd"]
+    container_name: ollama-token-logger-amd
+    environment:
+      BACKEND_NAME: ${AMD_BACKEND_NAME:-amd-r9700}
+      OLLAMA_BACKEND_URL: ${AMD_OLLAMA_BACKEND_URL:-http://10.0.0.150:11434}
+      LISTEN_PORT: "11436"
+      DATA_DIR: /data
+    ports:
+      - "11436:11436"
+    volumes:
+      - ./data-amd:/data
+    healthcheck:
+      test: ["CMD", "python", "/app/healthcheck.py"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+networks:
+  ollama-net:
+    name: ollama-token-logger_net

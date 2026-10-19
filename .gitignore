@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Runtime data (never commit usage logs)
+data/
+data-amd/
+*.jsonl
+*.jsonl.*
+
+# Environment
+.env
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/

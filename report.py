@@ -1,0 +1,342 @@
+#!/usr/bin/env python3
+"""Command-line OpenAI cost reporter for recorded Ollama token usage.
+
+Reads the JSONL usage log (usage.jsonl + rotated usage.jsonl.N) and reports:
+  * request counts, token totals, average generation speed
+  * backend utilisation
+  * estimated OpenAI API cost per configured model
+  * projected monthly cost
+
+Examples:
+    python report.py --period today
+    python report.py --period 7d --cache 25
+    python report.py --period 30d --format json --out report.json
+    python report.py --period all --format csv --out cost.csv
+
+These numbers are ESTIMATES (see README for caveats about tokenizer,
+reasoning tokens, prompt caching, and long-context pricing differences).
+"""
+from __future__ import annotations
+
+import argparse
+import csv
+import glob
+import io
+import json
+import math
+import os
+import sys
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, List, Optional
+
+from app.pricing import ModelPricing, cost_for_model, load_pricing
+
+
+# ---------------------------------------------------------------------------
+# Loading
+# ---------------------------------------------------------------------------
+def _parse_ts(value: str) -> Optional[datetime]:
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except (ValueError, AttributeError):
+        return None
+
+
+def _num(value: Any) -> Optional[float]:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    return None
+
+
+def load_usage(data_dir: str) -> List[Dict[str, Any]]:
+    records: List[Dict[str, Any]] = []
+    files = [os.path.join(data_dir, "usage.jsonl")]
+    files += sorted(glob.glob(os.path.join(data_dir, "usage.jsonl.*")))
+    for path in files:
+        if not os.path.exists(path):
+            continue
+        with open(path, "r", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    records.append(json.loads(line))
+                except (ValueError, TypeError):
+                    continue
+    return records
+
+
+def parse_period(period: str, now: datetime) -> Optional[datetime]:
+    """Return a cutoff datetime, or None for 'all'."""
+    p = period.strip().lower()
+    if p in ("all", "*"):
+        return None
+    if p == "today":
+        return now.replace(hour=0, minute=0, second=0, microsecond=0)
+    if p.endswith("d") and p[:-1].isdigit():
+        return now - timedelta(days=int(p[:-1]))
+    if p.endswith("h") and p[:-1].isdigit():
+        return now - timedelta(hours=int(p[:-1]))
+    if p.endswith("w") and p[:-1].isdigit():
+        return now - timedelta(weeks=int(p[:-1]))
+    raise ValueError(f"unrecognised period: {period!r}")
+
+
+def period_days(cutoff: Optional[datetime], now: datetime, records: List[Dict[str, Any]]) -> float:
+    if cutoff is None:
+        if records:
+            stamps = [ts for ts in (_parse_ts(r.get("timestamp", "")) for r in records) if ts]
+            if len(stamps) >= 2:
+                days = (max(stamps) - min(stamps)).total_seconds() / 86400.0
+                return max(1.0, days)
+        return 1.0
+    days = (now - cutoff).total_seconds() / 86400.0
+    return max(days, 1.0 / 24.0)
+
+
+def filter_period(records: List[Dict[str, Any]], cutoff: Optional[datetime]) -> List[Dict[str, Any]]:
+    if cutoff is None:
+        return records
+    out = []
+    for r in records:
+        ts = _parse_ts(r.get("timestamp", ""))
+        if ts is None:
+            out.append(r)  # keep records without parseable timestamps
+            continue
+        if ts >= cutoff:
+            out.append(r)
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Aggregation
+# ---------------------------------------------------------------------------
+def _avg(values: List[float]) -> Optional[float]:
+    values = [v for v in values if v is not None]
+    if not values:
+        return None
+    return sum(values) / len(values)
+
+
+def aggregate(
+    records: List[Dict[str, Any]],
+    pricing: List[ModelPricing],
+    cache_pct: float,
+    now: datetime,
+    cutoff: Optional[datetime],
+) -> Dict[str, Any]:
+    total_input = sum(_num(r.get("input_tokens")) or 0 for r in records)
+    total_output = sum(_num(r.get("output_tokens")) or 0 for r in records)
+    total_tokens = sum(_num(r.get("total_tokens")) or 0 for r in records)
+
+    status_counts: Dict[str, int] = {}
+    for r in records:
+        s = r.get("status", "unknown")
+        status_counts[s] = status_counts.get(s, 0) + 1
+
+    avg_output_tps = _avg([_num(r.get("output_tokens_per_second")) for r in records])
+    avg_prompt_tps = _avg([_num(r.get("prompt_tokens_per_second")) for r in records])
+
+    backends: Dict[str, Dict[str, Any]] = {}
+    for r in records:
+        b = r.get("backend", "unknown")
+        d = backends.setdefault(
+            b, {"backend": b, "requests": 0, "input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+        )
+        d["requests"] += 1
+        d["input_tokens"] += _num(r.get("input_tokens")) or 0
+        d["output_tokens"] += _num(r.get("output_tokens")) or 0
+        d["total_tokens"] += _num(r.get("total_tokens")) or 0
+
+    days = period_days(cutoff, now, records)
+    models: List[Dict[str, Any]] = []
+    for mp in pricing:
+        total_cost = 0.0
+        for r in records:
+            itok = _num(r.get("input_tokens"))
+            otok = _num(r.get("output_tokens"))
+            if itok is None and otok is None:
+                continue
+            total_cost += cost_for_model(mp, itok or 0.0, otok or 0.0, cache_pct)
+        models.append(
+            {
+                "model": mp.model,
+                "input_price_per_m": mp.input_price,
+                "cached_input_price_per_m": mp.cached_input_price,
+                "output_price_per_m": mp.output_price,
+                "effective_date": mp.effective_date,
+                "total_cost": round(total_cost, 6),
+                "daily_cost": round(total_cost / days, 6),
+                "monthly_projected": round(total_cost / days * 30.0, 6),
+            }
+        )
+
+    return {
+        "period": {
+            "cutoff": cutoff.isoformat() if cutoff else None,
+            "as_of": now.isoformat(),
+            "approx_days": round(days, 4),
+        },
+        "cache_assumption_pct": cache_pct,
+        "requests": len(records),
+        "status_counts": status_counts,
+        "tokens": {"input": total_input, "output": total_output, "total": total_tokens},
+        "avg_prompt_tokens_per_second": avg_prompt_tps,
+        "avg_output_tokens_per_second": avg_output_tps,
+        "backends": list(backends.values()),
+        "models": models,
+        "note": (
+            "Estimates only. Ollama vs OpenAI tokenizer, reasoning-token "
+            "accounting, prompt caching and long-context pricing differ."
+        ),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Output formatters
+# ---------------------------------------------------------------------------
+def _fmt_int(v: Optional[float]) -> str:
+    return "n/a" if v is None else f"{int(round(v)):,}"
+
+
+def _fmt_float(v: Optional[float], nd: int = 2) -> str:
+    return "n/a" if v is None else f"{v:,.{nd}f}"
+
+
+def format_text(summary: Dict[str, Any]) -> str:
+    L: List[str] = []
+    tok = summary["tokens"]
+    L.append("=" * 62)
+    L.append("Ollama Token Usage  ->  Estimated OpenAI API Cost")
+    L.append("=" * 62)
+    cov = summary["period"]
+    L.append(
+        f"Window        : {cov['cutoff'] or 'beginning of log'}  ->  {cov['as_of']}  (~{cov['approx_days']}d)"
+    )
+    L.append(f"Cache assume  : {summary['cache_assumption_pct']:.0f}% of input billed at cached rate")
+    L.append("")
+    L.append(f"Requests      : {summary['requests']:,}   {summary['status_counts']}")
+    L.append(f"Input tokens  : {_fmt_int(tok['input'])}")
+    L.append(f"Output tokens : {_fmt_int(tok['output'])}")
+    L.append(f"Total tokens  : {_fmt_int(tok['total'])}")
+    L.append(f"Avg in  speed : {_fmt_float(summary['avg_prompt_tokens_per_second'])} tok/s")
+    L.append(f"Avg out speed : {_fmt_float(summary['avg_output_tokens_per_second'])} tok/s")
+    L.append("")
+    L.append("Backend utilisation (by request count)")
+    L.append("-" * 62)
+    for b in summary["backends"]:
+        L.append(
+            f"  {b['requests']:>6} req  in={_fmt_int(b['input_tokens'])}  "
+            f"out={_fmt_int(b['output_tokens'])}  total={_fmt_int(b['total_tokens'])}   {b['backend']}"
+        )
+    L.append("")
+    L.append("Estimated OpenAI API cost")
+    L.append("-" * 62)
+    L.append(f"  {'model':<26} {'total':>12} {'/day':>10} {'/mo proj':>12}")
+    for m in summary["models"]:
+        L.append(
+            f"  {m['model']:<26} ${m['total_cost']:>11,.2f} ${m['daily_cost']:>9,.2f} "
+            f"${m['monthly_projected']:>11,.2f}"
+        )
+    L.append("")
+    L.append("Note: " + summary["note"])
+    return "\n".join(L)
+
+
+def format_csv(records: List[Dict[str, Any]], pricing: List[ModelPricing], cache_pct: float) -> str:
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    header = [
+        "request_id",
+        "timestamp",
+        "backend",
+        "model",
+        "endpoint",
+        "status",
+        "input_tokens",
+        "output_tokens",
+        "total_tokens",
+        "prompt_tokens_per_second",
+        "output_tokens_per_second",
+        "duration_seconds",
+    ] + [f"cost_{mp.model}" for mp in pricing]
+    writer.writerow(header)
+    for r in records:
+        itok = _num(r.get("input_tokens")) or 0.0
+        otok = _num(r.get("output_tokens")) or 0.0
+        row = [
+            r.get("request_id"),
+            r.get("timestamp"),
+            r.get("backend"),
+            r.get("model"),
+            r.get("endpoint"),
+            r.get("status"),
+            r.get("input_tokens"),
+            r.get("output_tokens"),
+            r.get("total_tokens"),
+            r.get("prompt_tokens_per_second"),
+            r.get("output_tokens_per_second"),
+            r.get("duration_seconds"),
+        ] + [round(cost_for_model(mp, itok, otok, cache_pct), 8) for mp in pricing]
+        writer.writerow(row)
+    return buf.getvalue()
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+def build_arg_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(description="Estimated OpenAI cost from Ollama usage.")
+    p.add_argument("--period", default="30d", help="today | 1d | 7d | 30d | 2w | 12h | all (default 30d)")
+    p.add_argument("--cache", type=float, default=0.0, help="cache-hit %% assumption for input (default 0)")
+    p.add_argument("--format", choices=["text", "json", "csv"], default="text")
+    p.add_argument("--out", help="write report to this file instead of stdout")
+    p.add_argument("--pricing", default=os.environ.get("PRICING_FILE") or "./pricing.json")
+    p.add_argument("--data-dir", default=os.environ.get("DATA_DIR") or "./data")
+    p.add_argument("--backend", help="filter to a single backend name")
+    p.add_argument("--models", help="comma-separated subset of OpenAI model names")
+    return p
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    args = build_arg_parser().parse_args(argv)
+    now = datetime.now(timezone.utc)
+    try:
+        cutoff = parse_period(args.period, now)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+
+    records = load_usage(args.data_dir)
+    if args.backend:
+        records = [r for r in records if r.get("backend") == args.backend]
+    records = filter_period(records, cutoff)
+
+    pricing = load_pricing(args.pricing)
+    if args.models:
+        wanted = {m.strip() for m in args.models.split(",") if m.strip()}
+        pricing = [mp for mp in pricing if mp.model in wanted]
+
+    summary = aggregate(records, pricing, args.cache, now, cutoff)
+
+    if args.format == "text":
+        out = format_text(summary)
+    elif args.format == "json":
+        out = json.dumps(summary, indent=2)
+    else:
+        out = format_csv(records, pricing, args.cache)
+
+    if args.out:
+        with open(args.out, "w", encoding="utf-8") as fh:
+            fh.write(out)
+        print(f"Wrote report to {args.out}")
+    else:
+        print(out)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
