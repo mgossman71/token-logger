@@ -87,7 +87,7 @@ tr.cheapest td{background:rgba(55,208,160,.08)}
   <div class="panel">
     <h2>What this usage costs on AI services <span class="muted small">(OpenAI + Anthropic · for the selected period)</span></h2>
     <div class="small muted" id="costSummary"></div>
-    <div class="small muted">Base = list price (no prompt cache). Cached = with the assumed cache discount applied to input tokens. Saved = Base - Cached. Output tokens are never discounted.</div>
+    <div class="small muted">No cache = full list price (no prompt cache). Cached = with the assumed cache discount (from the dropdown above) applied to input tokens. Savings = potential savings (No cache - Cached). Output tokens are never discounted.</div>
     <div id="costTable" style="margin-top:12px"></div>
   </div>
 
@@ -177,11 +177,13 @@ function renderCost(s){
   const label={openai:'OpenAI',anthropic:'Anthropic'};
   const providers=['openai','anthropic'];
   let html='';
+  const cachePct=$('cache').value;
+  const head='<th>Model</th><th>In $/M</th><th>Out $/M</th><th>No cache</th><th>Cached @ '+cachePct+'%</th><th>Savings</th>';
   providers.forEach(function(p){
     const rows=sorted.filter(function(m){return m.provider===p;});
     if(!rows.length) return;
     html+='<div class="prov">'+(label[p]||p)+'</div>'
-      +'<table><thead><tr><th>Model</th><th>In $/M</th><th>Out $/M</th><th>Base</th><th>Cached</th><th>Saved</th></tr></thead><tbody>'
+      +'<table><thead><tr>'+head+'</tr></thead><tbody>'
       +rows.map(function(m){
         const isCheapest=(m.model===cheapest.model);
         return '<tr'+(isCheapest?' class="cheapest"':'')+'><td>'+esc(m.model)+(isCheapest?' <span class="tag">cheapest</span>':'')+'</td><td class="num">'+(m.input_price_per_m!=null?Number(m.input_price_per_m).toFixed(3):'n/a')+'</td><td class="num">'+(m.output_price_per_m!=null?Number(m.output_price_per_m).toFixed(3):'n/a')+'</td><td class="num">'+fmtMoney(m.base_cost!=null?m.base_cost:m.total_cost)+'</td><td class="num">'+fmtMoney(m.cached_cost!=null?m.cached_cost:m.total_cost)+'</td><td class="num">'+fmtMoney(m.savings!=null?m.savings:0)+'</td></tr>';
@@ -190,7 +192,7 @@ function renderCost(s){
   });
   const other=sorted.filter(function(m){return providers.indexOf(m.provider)<0;});
   if(other.length){
-    html+='<table><thead><tr><th>Model</th><th>In $/M</th><th>Out $/M</th><th>Base</th><th>Cached</th><th>Saved</th></tr></thead><tbody>'
+    html+='<table><thead><tr>'+head+'</tr></thead><tbody>'
       +other.map(function(m){return '<tr><td>'+esc(m.model)+'</td><td class="num">'+(m.input_price_per_m!=null?Number(m.input_price_per_m).toFixed(3):'n/a')+'</td><td class="num">'+(m.output_price_per_m!=null?Number(m.output_price_per_m).toFixed(3):'n/a')+'</td><td class="num">'+fmtMoney(m.base_cost!=null?m.base_cost:m.total_cost)+'</td><td class="num">'+fmtMoney(m.cached_cost!=null?m.cached_cost:m.total_cost)+'</td><td class="num">'+fmtMoney(m.savings!=null?m.savings:0)+'</td></tr>';}).join('')
       +'</tbody></table>';
   }
