@@ -163,6 +163,22 @@ docker compose exec logger-5090 sh -c 'python -c "import json,sys;[print(json.lo
 }
 ```
 
+## Web dashboard
+
+The logger also serves a small read-only, self-contained dashboard on the same
+port — no extra services, no build step, works offline:
+
+    http://<host>:11435/                                   # the page (also /dashboard)
+    http://<host>:11435/dashboard/data?period=30d&cache=25 # JSON (for scripting)
+
+It shows request counts, token totals, average speed, a tokens-per-day and a
+cost-per-day chart, per-backend utilisation, the estimated cost per configured
+model, and the most recent requests. The numbers are computed with the exact
+same logic as `report.py`. It exposes only aggregate token counts and cost
+*estimates* — no prompt/response content is ever logged. Because it rides on the
+proxy port it is reachable wherever the proxy is; set `DASHBOARD_ENABLED=0` to
+turn it off and restore pure pass-through behaviour.
+
 ## Pricing configuration
 
 Prices live in `pricing.json` (one file, no code). Each model entry supports

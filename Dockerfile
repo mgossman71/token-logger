@@ -16,6 +16,7 @@ COPY app ./app
 COPY report.py ./
 COPY healthcheck.py ./
 COPY pricing.json ./
+COPY static ./static
 
 # Test suite + pytest config so `docker compose run ... python -m pytest` works
 # inside the image (the live integration test is excluded via .dockerignore).

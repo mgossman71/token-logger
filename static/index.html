@@ -1,0 +1,245 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ollama Token Usage</title>
+<style>
+:root{--bg:#0b0f17;--panel:#111826;--border:#1f2a3a;--text:#e6edf5;--muted:#8a97a8;--accent:#4f8cff;--accent2:#37d0a0;--warn:#f5b942;--bad:#ff6b6b}
+*{box-sizing:border-box}
+body{margin:0;font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:var(--text);line-height:1.5}
+.wrap{max-width:1120px;margin:0 auto;padding:24px 20px 60px}
+header{display:flex;flex-wrap:wrap;align-items:center;gap:16px;justify-content:space-between;margin-bottom:20px}
+h1{font-size:20px;margin:0;font-weight:600}
+.sub{color:var(--muted);font-size:13px;margin-top:4px}
+.controls{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+select,input,button{background:var(--panel);border:1px solid var(--border);color:var(--text);padding:8px 10px;border-radius:8px;font-size:13px}
+button{cursor:pointer}
+button:hover{border-color:var(--accent)}
+label{font-size:12px;color:var(--muted);display:inline-flex;gap:6px;align-items:center}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:16px}
+.card{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:14px 16px}
+.card .k{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+.card .v{font-size:24px;font-weight:600;margin-top:6px}
+.card .s{font-size:12px;color:var(--muted);margin-top:2px}
+.panel{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:16px;margin-bottom:16px}
+.panel h2{font-size:13px;margin:0 0 12px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.04em}
+.cols{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+@media(max-width:720px){.cols{grid-template-columns:1fr}}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{text-align:right;padding:7px 10px;border-bottom:1px solid var(--border);white-space:nowrap}
+th:first-child,td:first-child{text-align:left}
+th{color:var(--muted);font-weight:500}
+tr:last-child td{border-bottom:none}
+.num{font-variant-numeric:tabular-nums}
+.badge{padding:2px 8px;border-radius:999px;font-size:11px;font-weight:600}
+.badge.completed{background:rgba(55,208,160,.15);color:var(--accent2)}
+.badge.error,.badge.incomplete,.badge.cancelled{background:rgba(255,107,107,.15);color:var(--bad)}
+.legend{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--muted);margin-bottom:8px}
+.legend span{display:inline-flex;align-items:center;gap:6px}
+.dot{width:10px;height:10px;border-radius:2px;display:inline-block}
+.muted{color:var(--muted)}
+.small{font-size:12px}
+.chart{width:100%;height:auto;display:block}
+footer{margin-top:24px;color:var(--muted);font-size:12px}
+.empty{color:var(--muted);font-size:13px;padding:8px 0}
+.error{background:rgba(255,107,107,.1);border:1px solid rgba(255,107,107,.3);color:#ffb3b3;padding:10px 12px;border-radius:8px;font-size:13px;margin-bottom:16px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>Ollama Token Usage <span class="muted" id="backend"></span></h1>
+      <div class="sub" id="sub">Loading…</div>
+    </div>
+    <div class="controls">
+      <label>Period
+        <select id="period">
+          <option value="today">Today</option>
+          <option value="7d" selected>Last 7 days</option>
+          <option value="30d">Last 30 days</option>
+          <option value="90d">Last 90 days</option>
+          <option value="all">All time</option>
+        </select>
+      </label>
+      <label>Cache hit %
+        <input id="cache" type="number" min="0" max="100" value="0" style="width:70px">
+      </label>
+      <button id="refresh">Refresh</button>
+    </div>
+  </header>
+
+  <div id="error" class="error" style="display:none"></div>
+
+  <div class="grid" id="kpis"></div>
+
+  <div class="panel">
+    <h2>Tokens per day</h2>
+    <div class="legend"><span><i class="dot" style="background:#4f8cff"></i> Input</span><span><i class="dot" style="background:#37d0a0"></i> Output</span></div>
+    <div id="tokChart"></div>
+  </div>
+
+  <div class="panel">
+    <h2>Estimated OpenAI cost per day <span class="muted small">(cheapest → most expensive configured model)</span></h2>
+    <div class="legend"><span><i class="dot" style="background:#f5b942"></i> Low</span><span><i class="dot" style="background:#ff6b6b"></i> High</span></div>
+    <div id="costChart"></div>
+  </div>
+
+  <div class="cols">
+    <div class="panel" style="margin-bottom:0">
+      <h2>Backend utilisation</h2>
+      <div id="backendTable"></div>
+    </div>
+    <div class="panel" style="margin-bottom:0">
+      <h2>Estimated cost by model</h2>
+      <div id="costTable"></div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>Recent requests <span class="muted small" id="recentCount"></span></h2>
+    <div id="recentTable"></div>
+  </div>
+
+  <footer id="footer"></footer>
+</div>
+<script>
+const $ = (id) => document.getElementById(id);
+function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+function fmtInt(n){ if(n==null||isNaN(n)) return 'n/a'; return Math.round(Number(n)).toLocaleString('en-US'); }
+function fmtCompact(n){
+  if(n==null||isNaN(n)) return 'n/a'; n=Number(n); const a=Math.abs(n);
+  if(a>=1e6) return (n/1e6).toFixed(1)+'M';
+  if(a>=1e3) return (n/1e3).toFixed(1)+'k';
+  return String(Math.round(n));
+}
+function fmtMoney(n){ if(n==null||isNaN(n)) return 'n/a'; return '$'+Number(n).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}); }
+function fmtRate(n){ if(n==null||isNaN(n)) return 'n/a'; return Number(n).toFixed(1); }
+function fmtDur(n){ if(n==null||isNaN(n)) return 'n/a'; return Number(n).toFixed(2); }
+function statusText(c){ if(!c) return ''; return Object.keys(c).map(function(k){return k+' '+c[k];}).join(' · '); }
+
+function niceMax(v){
+  if(v<=0||!isFinite(v)) return 1;
+  const p=Math.pow(10,Math.floor(Math.log10(v))); const d=v/p;
+  let m; if(d<=1)m=1; else if(d<=2)m=2; else if(d<=2.5)m=2.5; else if(d<=5)m=5; else m=10;
+  return m*p;
+}
+
+function drawLineChart(containerId, labels, series, opts){
+  opts=opts||{};
+  const el=$(containerId);
+  const W=760,H=240,pad={l:54,r:18,t:14,b:34};
+  const n=labels.length;
+  if(!n){ el.innerHTML='<div class="empty">No data.</div>'; return; }
+  const yMax=niceMax(Math.max(1e-9, ...series.map(function(s){return Math.max.apply(null,s.values.concat([0]));})));
+  const x=function(i){ return n<=1 ? (pad.l+(W-pad.l-pad.r)/2) : pad.l + i*(W-pad.l-pad.r)/(n-1); };
+  const y=function(v){ return H-pad.b - (v/yMax)*(H-pad.t-pad.b); };
+  let svg='<svg class="chart" viewBox="0 0 '+W+' '+H+'" role="img">';
+  for(let g=0;g<=4;g++){
+    const val=yMax*g/4, yy=y(val);
+    svg+='<line x1="'+pad.l+'" y1="'+yy+'" x2="'+(W-pad.r)+'" y2="'+yy+'" stroke="#1f2a3a" stroke-width="1"/>';
+    svg+='<text x="'+(pad.l-8)+'" y="'+(yy+4)+'" fill="#8a97a8" font-size="11" text-anchor="end">'+fmtCompact(val)+'</text>';
+  }
+  const every=Math.max(1,Math.ceil(n/6));
+  for(let i=0;i<n;i+=every){
+    svg+='<text x="'+x(i)+'" y="'+(H-pad.b+18)+'" fill="#8a97a8" font-size="11" text-anchor="middle">'+esc(labels[i])+'</text>';
+  }
+  series.forEach(function(s){
+    let line='';
+    s.values.forEach(function(v,i){ line+=(i?'L':'M')+x(i).toFixed(1)+' '+y(v).toFixed(1)+' '; });
+    if(opts.area!==false){
+      const area=line+'L '+x(n-1).toFixed(1)+' '+y(0).toFixed(1)+' L '+x(0).toFixed(1)+' '+y(0).toFixed(1)+' Z';
+      svg+='<path d="'+area+'" fill="'+s.color+'" opacity="0.10"/>';
+    }
+    svg+='<path d="'+line+'" fill="none" stroke="'+s.color+'" stroke-width="2"/>';
+    s.values.forEach(function(v,i){ svg+='<circle cx="'+x(i).toFixed(1)+'" cy="'+y(v).toFixed(1)+'" r="2.5" fill="'+s.color+'"/>'; });
+  });
+  svg+='</svg>';
+  el.innerHTML=svg;
+}
+async function load(){
+  const period=$('period').value, cache=Number($('cache').value||0);
+  $('error').style.display='none';
+  $('sub').textContent='Loading…';
+  let data;
+  try{
+    const r=await fetch('/dashboard/data?period='+encodeURIComponent(period)+'&cache='+cache,{cache:'no-store'});
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    data=await r.json();
+  }catch(e){
+    $('sub').textContent='Failed to load';
+    $('error').textContent='Could not load usage data: '+e.message;
+    $('error').style.display='block';
+    return;
+  }
+  render(data);
+}
+
+function render(data){
+  const s=data.summary||{}, tok=s.tokens||{input:0,output:0,total:0};
+  const models=(s.models||[]).slice().sort(function(a,b){return a.total_cost-b.total_cost;});
+  const lo=models.length?models[0]:null, hi=models.length?models[models.length-1]:null;
+  const backends=[].concat(new Set((s.backends||[]).map(function(b){return b.backend;})));
+  $('backend').textContent=backends.length?('('+backends.join(', ')+')'):'';
+  $('sub').textContent=(s.requests||0)+' requests · cache '+(data.cache_assumption_pct||0)+'%';
+
+  $('kpis').innerHTML=[
+    ['Requests',fmtInt(s.requests),statusText(s.status_counts)],
+    ['Input tokens',fmtCompact(tok.input),fmtInt(tok.input)],
+    ['Output tokens',fmtCompact(tok.output),fmtInt(tok.output)],
+    ['Total tokens',fmtCompact(tok.total),fmtInt(tok.total)],
+    ['Avg out speed',(s.avg_output_tokens_per_second!=null?fmtRate(s.avg_output_tokens_per_second):'n/a')+' tok/s',(s.avg_prompt_tokens_per_second!=null?fmtRate(s.avg_prompt_tokens_per_second)+' tok/s in':'in n/a')],
+    ['Est. cost range',lo?fmtMoney(lo.total_cost):'n/a',hi?('→ '+fmtMoney(hi.total_cost)):''],
+  ].map(function(k){return '<div class="card"><div class="k">'+k[0]+'</div><div class="v num">'+k[1]+'</div><div class="s">'+esc(k[2]||'')+'</div></div>';}).join('');
+
+  const series=data.series||[], labels=series.map(function(p){return p.day.slice(5);});
+  if(series.length===0){
+    $('tokChart').innerHTML='<div class="empty">No data in this period.</div>';
+    $('costChart').innerHTML='<div class="empty">No data in this period.</div>';
+  }else{
+    drawLineChart('tokChart',labels,[
+      {name:'Input',color:'#4f8cff',values:series.map(function(p){return p.input_tokens;})},
+      {name:'Output',color:'#37d0a0',values:series.map(function(p){return p.output_tokens;})},
+    ]);
+    drawLineChart('costChart',labels,[
+      {name:'Low',color:'#f5b942',values:series.map(function(p){return p.cost_low;})},
+      {name:'High',color:'#ff6b6b',values:series.map(function(p){return p.cost_high;})},
+    ],{area:false});
+  }
+
+  const bt=s.backends||[];
+  $('backendTable').innerHTML=bt.length
+    ?'<table><thead><tr><th>Backend</th><th>Req</th><th>In</th><th>Out</th><th>Total</th></tr></thead><tbody>'+
+      bt.map(function(b){return '<tr><td>'+esc(b.backend)+'</td><td class="num">'+fmtInt(b.requests)+'</td><td class="num">'+fmtCompact(b.input_tokens)+'</td><td class="num">'+fmtCompact(b.output_tokens)+'</td><td class="num">'+fmtCompact(b.total_tokens)+'</td></tr>';}).join('')+
+      '</tbody></table>'
+    :'<div class="empty">No backends.</div>';
+
+  const ct=(s.models||[]).slice().sort(function(a,b){return b.total_cost-a.total_cost;});
+  $('costTable').innerHTML=ct.length
+    ?'<table><thead><tr><th>Model</th><th>Total</th><th>/day</th><th>/mo</th></tr></thead><tbody>'+
+      ct.map(function(m){return '<tr><td>'+esc(m.model)+'</td><td class="num">'+fmtMoney(m.total_cost)+'</td><td class="num">'+fmtMoney(m.daily_cost)+'</td><td class="num">'+fmtMoney(m.monthly_projected)+'</td></tr>';}).join('')+
+      '</tbody></table>'
+    :'<div class="empty">No models configured.</div>';
+
+  const rc=data.recent||[];
+  $('recentCount').textContent=rc.length?('('+rc.length+' shown)'):'';
+  $('recentTable').innerHTML=rc.length
+    ?'<table><thead><tr><th>Time (UTC)</th><th>Model</th><th>Status</th><th>In</th><th>Out</th><th>Out tok/s</th><th>Dur s</th></tr></thead><tbody>'+
+      rc.map(function(r){
+        const t=r.timestamp?new Date(r.timestamp).toISOString().replace('T',' ').slice(0,19)+' UTC':'—';
+        return '<tr><td>'+t+'</td><td>'+esc(r.model)+'</td><td><span class="badge '+esc(r.status)+'">'+esc(r.status)+'</span></td><td class="num">'+fmtInt(r.input_tokens)+'</td><td class="num">'+fmtInt(r.output_tokens)+'</td><td class="num">'+fmtRate(r.output_tokens_per_second)+'</td><td class="num">'+fmtDur(r.duration_seconds)+'</td></tr>';
+      }).join('')+
+      '</tbody></table>'
+    :'<div class="empty">No requests in this period.</div>';
+
+  $('footer').textContent='Estimates only — Ollama vs OpenAI differ in tokenizer, reasoning-token accounting, prompt caching and long-context pricing. Pricing source: '+(data.source||'https://platform.openai.com/docs/pricing');
+}
+
+$('refresh').addEventListener('click',load);
+$('period').addEventListener('change',load);
+$('cache').addEventListener('change',load);
+window.addEventListener('load',load);
+</script>
+</body>
+</html>
