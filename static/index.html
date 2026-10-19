@@ -57,10 +57,10 @@ footer{margin-top:24px;color:var(--muted);font-size:12px}
       <label>Period
         <select id="period">
           <option value="today">Today</option>
-          <option value="7d" selected>Last 7 days</option>
+          <option value="7d">Last 7 days</option>
           <option value="30d">Last 30 days</option>
           <option value="90d">Last 90 days</option>
-          <option value="all">All time</option>
+          <option value="all" selected>All time</option>
         </select>
       </label>
       <label>Cache hit %
@@ -81,7 +81,7 @@ footer{margin-top:24px;color:var(--muted);font-size:12px}
   </div>
 
   <div class="panel">
-    <h2>Estimated OpenAI cost per day <span class="muted small">(cheapest → most expensive configured model)</span></h2>
+    <h2>Cost by day — your actual usage <span class="muted small">(cheapest → most expensive configured model; these days sum to the total)</span></h2>
     <div class="legend"><span><i class="dot" style="background:#f5b942"></i> Low</span><span><i class="dot" style="background:#ff6b6b"></i> High</span></div>
     <div id="costChart"></div>
   </div>
@@ -182,7 +182,7 @@ function render(data){
   const lo=models.length?models[0]:null, hi=models.length?models[models.length-1]:null;
   const backends=[].concat(new Set((s.backends||[]).map(function(b){return b.backend;})));
   $('backend').textContent=backends.length?('('+backends.join(', ')+')'):'';
-  $('sub').textContent=(s.requests||0)+' requests · cache '+(data.cache_assumption_pct||0)+'%';
+  $('sub').textContent=(s.requests||0)+' requests'+(data.series&&data.series.length?(' · data: '+data.series[0].day+' → '+data.series[data.series.length-1].day+' ('+data.series.length+' days)'):'')+' · cache '+(data.cache_assumption_pct||0)+'%';
 
   $('kpis').innerHTML=[
     ['Requests',fmtInt(s.requests),statusText(s.status_counts)],
@@ -190,7 +190,7 @@ function render(data){
     ['Output tokens',fmtCompact(tok.output),fmtInt(tok.output)],
     ['Total tokens',fmtCompact(tok.total),fmtInt(tok.total)],
     ['Avg out speed',(s.avg_output_tokens_per_second!=null?fmtRate(s.avg_output_tokens_per_second):'n/a')+' tok/s',(s.avg_prompt_tokens_per_second!=null?fmtRate(s.avg_prompt_tokens_per_second)+' tok/s in':'in n/a')],
-    ['Est. cost range',lo?fmtMoney(lo.total_cost):'n/a',hi?('→ '+fmtMoney(hi.total_cost)):''],
+    ['Est. cost of your usage',lo?fmtMoney(lo.total_cost):'n/a',hi?('→ '+fmtMoney(hi.total_cost)):''],
   ].map(function(k){return '<div class="card"><div class="k">'+k[0]+'</div><div class="v num">'+k[1]+'</div><div class="s">'+esc(k[2]||'')+'</div></div>';}).join('');
 
   const series=data.series||[], labels=series.map(function(p){return p.day.slice(5);});
@@ -217,8 +217,8 @@ function render(data){
 
   const ct=(s.models||[]).slice().sort(function(a,b){return b.total_cost-a.total_cost;});
   $('costTable').innerHTML=ct.length
-    ?'<table><thead><tr><th>Model</th><th>Total</th><th>/day</th><th>/mo</th></tr></thead><tbody>'+
-      ct.map(function(m){return '<tr><td>'+esc(m.model)+'</td><td class="num">'+fmtMoney(m.total_cost)+'</td><td class="num">'+fmtMoney(m.daily_cost)+'</td><td class="num">'+fmtMoney(m.monthly_projected)+'</td></tr>';}).join('')+
+    ?'<table><thead><tr><th>Model</th><th>In $/M</th><th>Out $/M</th><th>Cost (this window)</th></tr></thead><tbody>'+
+      ct.map(function(m){return '<tr><td>'+esc(m.model)+'</td><td class="num">'+(m.input_price_per_m!=null?Number(m.input_price_per_m).toFixed(3):'n/a')+'</td><td class="num">'+(m.output_price_per_m!=null?Number(m.output_price_per_m).toFixed(3):'n/a')+'</td><td class="num">'+fmtMoney(m.total_cost)+'</td></tr>';}).join('')+
       '</tbody></table>'
     :'<div class="empty">No models configured.</div>';
 

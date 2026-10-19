@@ -35,7 +35,7 @@ Cline / other AI clients
   `data/usage.jsonl`, with size-based rotation. Logging failures never break
   inference.
 - **OpenAI cost estimation**: config-driven pricing + a CLI reporter with
-  cache-hit assumptions, daily/weekly/monthly and projected-monthly costs.
+  cache-hit assumptions, and the estimated cost of the actual usage in the selected window (no projection).
 - **Multi-backend ready**: one Compose instance per Ollama server. RTX 5090 is
   on by default; the AMD R9700 instance is a one-line, no-code-change addition.
 

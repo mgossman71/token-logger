@@ -169,8 +169,6 @@ def aggregate(
                 "output_price_per_m": mp.output_price,
                 "effective_date": mp.effective_date,
                 "total_cost": round(total_cost, 6),
-                "daily_cost": round(total_cost / days, 6),
-                "monthly_projected": round(total_cost / days * 30.0, 6),
             }
         )
 
@@ -233,13 +231,13 @@ def format_text(summary: Dict[str, Any]) -> str:
             f"out={_fmt_int(b['output_tokens'])}  total={_fmt_int(b['total_tokens'])}   {b['backend']}"
         )
     L.append("")
-    L.append("Estimated OpenAI API cost")
+    L.append("Estimated OpenAI API cost (actual usage in this window - no projection)")
     L.append("-" * 62)
-    L.append(f"  {'model':<26} {'total':>12} {'/day':>10} {'/mo proj':>12}")
+    L.append(f"  {'model':<26} {'in $/M':>9} {'out $/M':>9} {'cost (window)':>14}")
     for m in summary["models"]:
         L.append(
-            f"  {m['model']:<26} ${m['total_cost']:>11,.2f} ${m['daily_cost']:>9,.2f} "
-            f"${m['monthly_projected']:>11,.2f}"
+            f"  {m['model']:<26} {m['input_price_per_m']:>9.3f} {m['output_price_per_m']:>9.3f} "
+            f"${m['total_cost']:>13,.2f}"
         )
     L.append("")
     L.append("Note: " + summary["note"])
