@@ -133,7 +133,7 @@ async function load(){
 
 function render(data){
   const s=data.summary||{}, tok=s.tokens||{input:0,output:0,total:0};
-  const backends=[].concat(new Set((s.backends||[]).map(function(b){return b.backend;})));
+  const backends=[...new Set((s.backends||[]).map(function(b){return b.backend;}))];
   $('backend').textContent=backends.length?('('+backends.join(', ')+')'):'';
   const periodLabel=({today:'today','7d':'last 7 days','30d':'last 30 days','90d':'last 90 days',all:'all time'})[$('period').value]||$('period').value;
   $('sub').textContent=(s.requests||0)+' requests · '+periodLabel+(data.as_of?(' · as of '+String(data.as_of).replace('T',' ').slice(0,19)+' UTC'):'');
