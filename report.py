@@ -105,10 +105,9 @@ def filter_period(records: List[Dict[str, Any]], cutoff: Optional[datetime]) -> 
     out = []
     for r in records:
         ts = _parse_ts(r.get("timestamp", ""))
-        if ts is None:
-            out.append(r)  # keep records without parseable timestamps
-            continue
-        if ts >= cutoff:
+        # A record without a parseable timestamp can't be placed in a window;
+        # keeping it would add its cost to every period. ("all" keeps it.)
+        if ts is not None and ts >= cutoff:
             out.append(r)
     return out
 
