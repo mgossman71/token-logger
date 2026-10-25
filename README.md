@@ -207,12 +207,19 @@ same logic as `report.py`. It exposes only aggregate token counts and cost
 proxy port it is reachable wherever the proxy is; set `DASHBOARD_ENABLED=0` to
 turn it off and restore pure pass-through behaviour.
 
+**Average speed** is token-weighted — total tokens ÷ total Ollama eval time —
+not a mean of per-request rates, so a 1-token reply timed at ~1µs can't skew
+it. The *input* speed counts the whole prompt, including the prefix Ollama
+reuses from its KV cache, so on multi-turn chats it is far above raw prompt
+processing speed. `/v1` records have no timings and are excluded. Costs under
+$1 are shown to 4 decimals.
+
 ## Pricing configuration
 
 Prices live in `pricing.json` (one file, no code). Each model entry supports a
 `provider` (OpenAI or Anthropic), input / cached-input / output price per 1M
 tokens, an effective date, and optional long-context tiers. **Verify these against
-https://openai.com/api/pricing/ and https://docs.anthropic.com/en/docs/about-claude/pricing — they are a starting point, not gospel.**
+https://developers.openai.com/api/docs/pricing and https://platform.claude.com/docs/en/about-claude/pricing (rates last verified 2026-10-25) — they are a starting point, not gospel.**
 
 Cost model per request, per model:
 
@@ -221,6 +228,11 @@ cost = ( input_tokens  * (1 - cache) * input_price
        + input_tokens  * cache       * cached_input_price
        + output_tokens * output_price ) / 1_000_000
 ```
+
+**Long-context tiers** re-price the *whole* request when its input tokens are
+strictly **above** the tier's `min_tokens` (OpenAI: >272K; Claude Haiku 5.5:
+>100,000). A prompt of exactly the threshold is billed at base rates. The tier
+is decided per request, never on period totals.
 
 > **These are estimates, not billing predictions.** Ollama and OpenAI/Anthropic differ in
 > tokenization, how reasoning tokens are counted, prompt-caching behaviour, and

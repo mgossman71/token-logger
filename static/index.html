@@ -113,7 +113,8 @@ function fmtCompact(n){
   if(a>=1e3) return (n/1e3).toFixed(1)+'k';
   return String(Math.round(n));
 }
-function fmtMoney(n){ if(n==null||isNaN(n)) return 'n/a'; return '$'+Number(n).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}); }
+// Sub-dollar amounts get 4 decimals so small periods don't all read "$0.00".
+function fmtMoney(n){ if(n==null||isNaN(n)) return 'n/a'; n=Number(n); const d=(n!==0&&Math.abs(n)<1)?4:2; return '$'+n.toLocaleString('en-US',{minimumFractionDigits:d,maximumFractionDigits:d}); }
 function fmtRate(n){ if(n==null||isNaN(n)) return 'n/a'; return Number(n).toFixed(1); }
 function fmtDur(n){ if(n==null||isNaN(n)) return 'n/a'; return Number(n).toFixed(2); }
 // Timezone: '' = server default (TIMEZONE), otherwise an IANA zone. The zone
@@ -168,7 +169,7 @@ function render(data){
     ['Input tokens',fmtCompact(tok.input),fmtInt(tok.input)],
     ['Output tokens',fmtCompact(tok.output),fmtInt(tok.output)],
     ['Total tokens',fmtCompact(tok.total),fmtInt(tok.total)],
-    ['Avg out speed',(s.avg_output_tokens_per_second!=null?fmtRate(s.avg_output_tokens_per_second):'n/a')+' tok/s',(s.avg_prompt_tokens_per_second!=null?fmtRate(s.avg_prompt_tokens_per_second)+' tok/s in':'in n/a')],
+    ['Avg out speed',(s.avg_output_tokens_per_second!=null?fmtRate(s.avg_output_tokens_per_second):'n/a')+' tok/s',(s.avg_prompt_tokens_per_second!=null?fmtRate(s.avg_prompt_tokens_per_second)+' tok/s in (incl. Ollama cache reuse)':'in n/a')],
   ].map(function(k){return '<div class="card"><div class="k">'+k[0]+'</div><div class="v num">'+k[1]+'</div><div class="s">'+esc(k[2]||'')+'</div></div>';}).join('');
 
   renderCost(s);

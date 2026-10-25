@@ -77,12 +77,13 @@ def parse_period(period: str, now: datetime) -> Optional[datetime]:
         return None
     if p == "today":
         return now.replace(hour=0, minute=0, second=0, microsecond=0)
-    if p.endswith("d") and p[:-1].isdigit():
-        return now - timedelta(days=int(p[:-1]))
-    if p.endswith("h") and p[:-1].isdigit():
-        return now - timedelta(hours=int(p[:-1]))
-    if p.endswith("w") and p[:-1].isdigit():
-        return now - timedelta(weeks=int(p[:-1]))
+    units = {"d": "days", "h": "hours", "w": "weeks"}
+    if p[-1:] in units and p[:-1].isdigit():
+        # Subtract in UTC: aware-datetime arithmetic in a local zone is
+        # wall-clock based and would be off by an hour across a DST change.
+        delta = timedelta(**{units[p[-1]]: int(p[:-1])})
+        tz = now.tzinfo or timezone.utc
+        return (now.astimezone(timezone.utc) - delta).astimezone(tz)
     raise ValueError(f"unrecognised period: {period!r}")
 
 
@@ -115,11 +116,33 @@ def filter_period(records: List[Dict[str, Any]], cutoff: Optional[datetime]) -> 
 # ---------------------------------------------------------------------------
 # Aggregation
 # ---------------------------------------------------------------------------
-def _avg(values: List[float]) -> Optional[float]:
-    values = [v for v in values if v is not None]
-    if not values:
+def _throughput(records: List[Dict[str, Any]], tokens_key: str, rate_key: str) -> Optional[float]:
+    """Token-weighted tokens/second: sum(tokens) / sum(seconds).
+
+    Each record's seconds are recovered as tokens / rate (rate was computed
+    from Ollama's own duration). A plain mean of per-request rates lets a
+    1-token request timed at ~1us (1,000,000 tok/s) swamp the average.
+    """
+    tokens = 0.0
+    seconds = 0.0
+    for r in records:
+        t = _num(r.get(tokens_key))
+        rate = _num(r.get(rate_key))
+        if not t or not rate or rate <= 0:
+            continue
+        tokens += t
+        seconds += t / rate
+    if seconds <= 0:
         return None
-    return sum(values) / len(values)
+    return tokens / seconds
+
+
+def _record_total(r: Dict[str, Any]) -> float:
+    # Fall back to input + output so the total always equals the shown parts.
+    total = _num(r.get("total_tokens"))
+    if total is not None:
+        return total
+    return (_num(r.get("input_tokens")) or 0) + (_num(r.get("output_tokens")) or 0)
 
 
 def aggregate(
@@ -131,15 +154,15 @@ def aggregate(
 ) -> Dict[str, Any]:
     total_input = sum(_num(r.get("input_tokens")) or 0 for r in records)
     total_output = sum(_num(r.get("output_tokens")) or 0 for r in records)
-    total_tokens = sum(_num(r.get("total_tokens")) or 0 for r in records)
+    total_tokens = sum(_record_total(r) for r in records)
 
     status_counts: Dict[str, int] = {}
     for r in records:
         s = r.get("status", "unknown")
         status_counts[s] = status_counts.get(s, 0) + 1
 
-    avg_output_tps = _avg([_num(r.get("output_tokens_per_second")) for r in records])
-    avg_prompt_tps = _avg([_num(r.get("prompt_tokens_per_second")) for r in records])
+    avg_output_tps = _throughput(records, "output_tokens", "output_tokens_per_second")
+    avg_prompt_tps = _throughput(records, "input_tokens", "prompt_tokens_per_second")
 
     backends: Dict[str, Dict[str, Any]] = {}
     for r in records:
@@ -150,7 +173,7 @@ def aggregate(
         d["requests"] += 1
         d["input_tokens"] += _num(r.get("input_tokens")) or 0
         d["output_tokens"] += _num(r.get("output_tokens")) or 0
-        d["total_tokens"] += _num(r.get("total_tokens")) or 0
+        d["total_tokens"] += _record_total(r)
 
     days = period_days(cutoff, now, records)
     models: List[Dict[str, Any]] = []

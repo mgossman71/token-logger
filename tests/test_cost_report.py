@@ -99,8 +99,11 @@ def test_long_context_tier_applies(tmp_path):
     tiered = [m for m in load_pricing(PRICING_FILE) if m.long_context_tiers][0]
     threshold = tiered.long_context_tiers[0]["min_tokens"]
     below = cost_for_model(tiered, threshold - 1, 100, 0)
-    above = cost_for_model(tiered, threshold, 100, 0)
-    assert above > below, "crossing the long-context threshold must raise the per-token rate"
+    at = cost_for_model(tiered, threshold, 100, 0)
+    above = cost_for_model(tiered, threshold + 1, 100, 0)
+    # Vendors price long context strictly ABOVE the threshold.
+    assert abs(at - (threshold * tiered.input_price + 100 * tiered.output_price) / 1e6) < 1e-12
+    assert above > at > below, "crossing the long-context threshold must raise the per-token rate"
 
 
 def test_cost_for_model_cached_math():
@@ -138,3 +141,32 @@ def test_aggregate_emits_cache_fields(tmp_path):
     assert mini["measured_cached_pct"] == 40.0
     assert abs(mini["cached_cost"] - mini["base_cost"]) < 1e-9
     assert mini["base_cost"] > mini["measured_cost"]
+
+
+def test_avg_speed_is_token_weighted():
+    # 100 tok in 1s + 1 tok in 1us: true speed ~101 tok/s, not the ~500k a
+    # plain mean of per-request rates would report.
+    recs = [
+        {"input_tokens": 1000, "output_tokens": 100, "output_tokens_per_second": 100.0,
+         "prompt_tokens_per_second": 1000.0},
+        {"input_tokens": 10, "output_tokens": 1, "output_tokens_per_second": 1_000_000.0,
+         "prompt_tokens_per_second": 100.0},
+        {"input_tokens": 500, "output_tokens": 50, "output_tokens_per_second": None,
+         "prompt_tokens_per_second": None},
+    ]
+    now = datetime.now(timezone.utc)
+    s = report_mod.aggregate(recs, [], 0.0, now, None)
+    assert abs(s["avg_output_tokens_per_second"] - 101 / (1.0 + 1e-6)) < 1e-6
+    assert abs(s["avg_prompt_tokens_per_second"] - 1010 / (1.0 + 0.1)) < 1e-6
+    assert s["tokens"]["total"] == 1661
+
+
+def test_day_periods_are_exact_across_dst():
+    from zoneinfo import ZoneInfo
+    # America/Chicago leaves DST on 2026-11-01; 7d back must be exactly 168h.
+    now = datetime(2026, 11, 3, 12, 0, tzinfo=ZoneInfo("America/Chicago"))
+    cutoff = report_mod.parse_period("7d", now)
+    # Measure in UTC: same-tzinfo subtraction in Python is wall-clock based.
+    elapsed = now.astimezone(timezone.utc) - cutoff.astimezone(timezone.utc)
+    assert elapsed.total_seconds() == 7 * 86400
+    assert cutoff.utcoffset() != now.utcoffset()  # cutoff was still in CDT

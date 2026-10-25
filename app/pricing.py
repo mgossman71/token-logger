@@ -9,9 +9,10 @@ Cost model (per model):
            + input_tokens  * cache      * cached_input_price
            + output_tokens * output_price ) / 1_000_000
 
-Long-context tiers: if the request's total input tokens meet or exceed a tier's
+Long-context tiers: if the request's total input tokens EXCEED a tier's
 ``min_tokens``, that tier's rates replace the base rates for the whole request
-(matches OpenAI's long-context pricing, which re-prices the entire call).
+(OpenAI: "long context: >272K input tokens"; Anthropic Haiku 5.5: "prompts
+over 100,000 tokens" - a prompt of exactly the threshold is billed at base).
 
 These are ESTIMATES: Ollama and OpenAI tokenizer, reasoning-token accounting,
 prompt caching behaviour, and context-dependent pricing all differ.
@@ -109,7 +110,7 @@ def cost_for_model(
     if mp.long_context_tiers:
         tiers = sorted(mp.long_context_tiers, key=lambda t: t.get("min_tokens", 0), reverse=True)
         for tier in tiers:
-            if in_tok >= tier.get("min_tokens", 0):
+            if in_tok > tier.get("min_tokens", 0):
                 inp = _f(tier.get("input_price"), inp)
                 cip = _f(tier.get("cached_input_price"), cip)
                 op = _f(tier.get("output_price"), op)
