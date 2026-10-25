@@ -21,7 +21,7 @@ from starlette.routing import Route
 
 from . import context
 from .config import Config
-from .proxy import chat_handler, generate_handler, passthrough_handler
+from .proxy import chat_handler, generate_handler, openai_handler, passthrough_handler
 from .storage import JsonlStore
 
 
@@ -53,6 +53,9 @@ def _routes(cfg: Config) -> List[Route]:
     base = [
         Route("/api/chat", chat_handler, methods=["POST"]),
         Route("/api/generate", generate_handler, methods=["POST"]),
+        # Ollama's OpenAI-compatible endpoints (e.g. Cline "OpenAI Compatible").
+        Route("/v1/chat/completions", openai_handler, methods=["POST"]),
+        Route("/v1/completions", openai_handler, methods=["POST"]),
         # Everything else (including /api/version, /api/tags, /api/show,
         # /api/pull, /api/embed, ...) is forwarded transparently.
         Route("/{path:path}", passthrough_handler, methods=["GET", "POST"]),

@@ -89,15 +89,20 @@ def tail_append(buf: bytearray, chunk: bytes, max_bytes: int) -> None:
 def _has_stats(obj: Any) -> bool:
     if not isinstance(obj, dict):
         return False
+    if isinstance(obj.get("usage"), dict):
+        return True  # OpenAI-compatible /v1 response or final stream chunk
     return any(k in obj for k in ("prompt_eval_count", "eval_count", "total_duration"))
 
 
 def parse_tail_usage(tail: bytes) -> Optional[Dict[str, Any]]:
     """Extract the usage-bearing object from the bounded response tail.
 
-    Handles both:
+    Handles:
       * streaming NDJSON -> the final ``done: true`` line carries the stats;
-      * a single non-streaming JSON object carrying the stats at top level.
+      * a single non-streaming JSON object carrying the stats at top level;
+      * OpenAI-compatible SSE (``data: {...}`` lines) -> the chunk carrying
+        ``usage`` (only sent when the client asked for
+        ``stream_options.include_usage``).
     """
     if not tail:
         return None
@@ -108,7 +113,9 @@ def parse_tail_usage(tail: bytes) -> Optional[Dict[str, Any]]:
         candidates.append(text)
     for cand in candidates:
         s = cand.strip()
-        if not s:
+        if s.startswith("data:"):
+            s = s[5:].strip()
+        if not s or s == "[DONE]":
             continue
         try:
             obj = json.loads(s)
@@ -289,4 +296,5 @@ class ProxyHandler:
 
 chat_handler = ProxyHandler(True)
 generate_handler = ProxyHandler(True)
+openai_handler = ProxyHandler(True)
 passthrough_handler = ProxyHandler(False)

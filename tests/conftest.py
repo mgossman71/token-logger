@@ -197,7 +197,33 @@ def build_mock_ollama():
         await send({"type": "http.response.body", "body": final.encode("utf-8"), "more_body": True})
         await send({"type": "http.response.body", "body": b"", "more_body": False})
 
+    async def _openai_chat(scope, receive, send) -> None:
+        data = json.loads((await _read_body(receive)) or b"{}")
+        model = data.get("model", "test-model")
+        usage = {"prompt_tokens": 120, "completion_tokens": 30, "total_tokens": 150}
+        include_usage = bool((data.get("stream_options") or {}).get("include_usage"))
+        if data.get("stream"):
+            await send({"type": "http.response.start", "status": 200, "headers": [(b"content-type", b"text/event-stream")]})
+            chunks = [
+                {"id": "c1", "object": "chat.completion.chunk", "model": model,
+                 "choices": [{"index": 0, "delta": {"role": "assistant", "content": "Pong!", "reasoning": "hmm"}, "finish_reason": None}]},
+                {"id": "c1", "object": "chat.completion.chunk", "model": model,
+                 "choices": [{"index": 0, "delta": {"content": ""}, "finish_reason": "stop"}]},
+            ]
+            if include_usage:
+                chunks.append({"id": "c1", "object": "chat.completion.chunk", "model": model, "choices": [], "usage": usage})
+            for c in chunks:
+                await send({"type": "http.response.body", "body": f"data: {json.dumps(c)}\n\n".encode("utf-8"), "more_body": True})
+            await send({"type": "http.response.body", "body": b"data: [DONE]\n\n", "more_body": False})
+            return
+        await _send_json(send, 200, {
+            "id": "c1", "object": "chat.completion", "model": model,
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "Pong!"}, "finish_reason": "stop"}],
+            "usage": usage,
+        })
+
     routes = [
+        Route("/v1/chat/completions", _ASGI(_openai_chat), methods=["POST"]),
         Route("/api/version", _ASGI(_version), methods=["GET"]),
         Route("/api/tags", _ASGI(_tags), methods=["GET"]),
         Route("/api/chat", _ASGI(_chat), methods=["POST"]),

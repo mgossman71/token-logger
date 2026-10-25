@@ -10,6 +10,10 @@ and non-streaming (single object) ``/api/chat`` and ``/api/generate``:
     total_duration         ns for the whole request
     load_duration          ns spent loading the model
 
+For the OpenAI-compatible ``/v1`` endpoints Ollama instead reports a
+``usage`` object (``prompt_tokens``, ``completion_tokens``) with no timings, so
+durations and rates are null for those records.
+
 We only ever surface numbers Ollama actually gave us. If a statistic is absent
 we emit ``None`` (JSON null) rather than inventing a value.
 """
@@ -46,6 +50,8 @@ def extract_usage(payload: Optional[Dict[str, Any]]) -> Dict[str, Optional[float
     non-streaming response object.
     """
     p = payload or {}
+    if isinstance(p.get("usage"), dict) and "prompt_eval_count" not in p:
+        return _extract_openai_usage(p["usage"])
     input_tokens = _num(p.get("prompt_eval_count"))
     output_tokens = _num(p.get("eval_count"))
     prompt_eval_duration = p.get("prompt_eval_duration")
@@ -75,6 +81,26 @@ def extract_usage(payload: Optional[Dict[str, Any]]) -> Dict[str, Optional[float
         "load_duration_seconds": (float(load_duration) / 1e9)
         if isinstance(load_duration, (int, float)) and not isinstance(load_duration, bool)
         else None,
+    }
+
+
+def _extract_openai_usage(u: Dict[str, Any]) -> Dict[str, Optional[float]]:
+    input_tokens = _num(u.get("prompt_tokens"))
+    output_tokens = _num(u.get("completion_tokens"))
+    total_tokens = _num(u.get("total_tokens"))
+    if total_tokens is None and input_tokens is not None and output_tokens is not None:
+        total_tokens = input_tokens + output_tokens
+    details = u.get("prompt_tokens_details")
+    cached = _num(details.get("cached_tokens")) if isinstance(details, dict) else None
+    return {
+        "input_tokens": input_tokens,
+        "cached_input_tokens": cached,
+        "output_tokens": output_tokens,
+        "total_tokens": total_tokens,
+        "prompt_tokens_per_second": None,
+        "output_tokens_per_second": None,
+        "duration_seconds": None,
+        "load_duration_seconds": None,
     }
 
 
