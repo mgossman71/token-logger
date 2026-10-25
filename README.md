@@ -22,7 +22,8 @@ Cline / other AI clients
 ## What it does
 
 - **Transparent Ollama proxy** for `/api/chat` and `/api/generate` (streaming
-  and non-streaming), and passthrough for every other Ollama endpoint
+  and non-streaming), Ollama's OpenAI-compatible `/v1/chat/completions` and
+  `/v1/completions`, and passthrough for every other Ollama endpoint
   (`/api/version`, `/api/tags`, `/api/show`, `/api/pull`, `/api/embed`, …).
 - **Byte-perfect forwarding**: requests and responses are forwarded unchanged.
   It never converts Ollama to OpenAI format, never rewrites `thinking`
@@ -30,7 +31,9 @@ Cline / other AI clients
 - **Token accounting** from Ollama's own reported stats (`prompt_eval_count`,
   `eval_count`, `prompt_eval_duration`, `eval_duration`, `total_duration`,
   `load_duration`) — no invented numbers. Incomplete/cancelled/error requests
-  are tracked separately.
+  are tracked separately. For `/v1` requests the counts come from the OpenAI
+  `usage` object (`prompt_tokens`, `completion_tokens`, cached tokens); see
+  [OpenAI-compatible clients](#openai-compatible-clients-v1).
 - **File-based storage**: one JSON Lines record per inference request at
   `data/usage.jsonl`, with size-based rotation. Logging failures never break
   inference.
@@ -134,7 +137,26 @@ docker compose exec logger-5090 python report.py --period 30d --format csv  --ou
 # Filters
 docker compose exec logger-5090 python report.py --period 30d --backend rtx5090
 docker compose exec logger-5090 python report.py --period 30d --models gpt-4o-mini,o1
+
+# Timezone for "today" (default: $TIMEZONE, else UTC)
+docker compose exec logger-5090 python report.py --period today --tz America/Chicago
 ```
+
+Timestamps in `usage.jsonl` are always stored in UTC; `TIMEZONE` / `--tz` only
+change where day boundaries fall and how times are displayed.
+
+### OpenAI-compatible clients (`/v1`)
+
+Clients pointed at Ollama's OpenAI-compatible API (e.g. Cline's "OpenAI
+Compatible" provider, which lets you set reasoning effort) are recorded too.
+Requests are still forwarded unchanged, so two limits apply:
+
+- **Streaming needs `stream_options.include_usage: true`** from the client —
+  only then does Ollama send a final chunk with `usage`. Without it the request
+  is recorded as `completed` with null token counts. The logger never adds the
+  option itself.
+- **No timings**: the `usage` object has no durations, so tok/s and duration
+  are null for `/v1` records.
 
 ### Inspecting the token log
 
@@ -172,11 +194,14 @@ port — no extra services, no build step, works offline:
 
     http://<host>:11435/                                   # the page (also /dashboard)
     http://<host>:11435/dashboard/data?period=30d&cache=25 # JSON (for scripting)
+    http://<host>:11435/dashboard/data?period=today&tz=America/Chicago
 
 It shows the key usage blocks on top (requests, input / output / total tokens,
 average speed), then what that usage would cost on each configured OpenAI and
 Anthropic model (grouped by provider, cheapest highlighted), and the most recent
-requests. The numbers are computed with the exact
+requests. "Today", the daily buckets and the shown times use the `TIMEZONE`
+setting by default; the **Timezone** selector overrides it per viewer (remembered
+in that browser). The numbers are computed with the exact
 same logic as `report.py`. It exposes only aggregate token counts and cost
 *estimates* — no prompt/response content is ever logged. Because it rides on the
 proxy port it is reachable wherever the proxy is; set `DASHBOARD_ENABLED=0` to
@@ -263,7 +288,9 @@ pricing.json    OpenAI + Anthropic price table (edit me)
 | Health is not `healthy` | Logger process check failed: `docker compose logs logger-5090` |
 | `502 upstream Ollama connection error` | Backend unreachable from the container: check `OLLAMA_BACKEND_URL` and that the container can route to `10.0.0.140`. Verify with `docker compose exec logger-5090 python -c "import urllib.request;print(urllib.request.urlopen('http://10.0.0.140:11434/api/version').read())"` |
 | `504 upstream Ollama timed out` | Long inference: raise `READ_TIMEOUT` |
-| No record for a request | Non-inference endpoints aren't recorded by design; check `status` in the log |
+| No record for a request | Only `/api/chat`, `/api/generate` and `/v1/(chat/)completions` are recorded; other endpoints are passthrough by design. Check `docker compose logs logger-5090` for the path the client actually calls |
+| `/v1` records have null tokens | The client streams without `stream_options.include_usage`; see [OpenAI-compatible clients](#openai-compatible-clients-v1) |
+| "Today" starts at the wrong hour | Set `TIMEZONE` in `.env` (IANA name, e.g. `America/Chicago`) or pick a zone in the dashboard |
 | Costs look off | Edit `pricing.json` and/or adjust `--cache`; these are estimates |
 
 ## What is verified here vs. on docker0
