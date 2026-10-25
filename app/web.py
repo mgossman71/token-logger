@@ -18,6 +18,7 @@ import os
 import sys
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse
@@ -53,10 +54,21 @@ def _parse_ts(value: Any) -> Optional[datetime]:
         return None
 
 
-def _day(ts: Optional[datetime]) -> Optional[str]:
+def _resolve_tz(name: Optional[str], default: Optional[str] = None):
+    """IANA zone from the request, else the configured TIMEZONE, else UTC."""
+    for cand in (name, default):
+        if cand and cand.strip():
+            try:
+                return ZoneInfo(cand.strip())
+            except (ZoneInfoNotFoundError, ValueError):
+                continue
+    return timezone.utc
+
+
+def _day(ts: Optional[datetime], tz=timezone.utc) -> Optional[str]:
     if ts is None:
         return None
-    return ts.astimezone(timezone.utc).strftime("%Y-%m-%d")
+    return ts.astimezone(tz).strftime("%Y-%m-%d")
 
 
 def _num(v: Any) -> float:
@@ -65,11 +77,12 @@ def _num(v: Any) -> float:
     return 0.0
 
 
-def build_series(records: List[Dict[str, Any]], pricing, cache_pct: float) -> List[Dict[str, Any]]:
-    """Per-UTC-day buckets for the chart (tokens + cheapest/most-expensive cost)."""
+def build_series(records: List[Dict[str, Any]], pricing, cache_pct: float,
+                 tz=timezone.utc) -> List[Dict[str, Any]]:
+    """Per-local-day buckets (in ``tz``) for the chart (tokens + cheapest/most-expensive cost)."""
     buckets: Dict[str, Dict[str, float]] = {}
     for r in records:
-        day = _day(_parse_ts(r.get("timestamp")))
+        day = _day(_parse_ts(r.get("timestamp")), tz)
         if day is None:
             continue
         it = _num(r.get("input_tokens"))
@@ -104,19 +117,25 @@ def build_series(records: List[Dict[str, Any]], pricing, cache_pct: float) -> Li
 
 
 def _collect(data_dir: str, pricing_file: str, period: str, cache_pct: float,
-             now: datetime, recent_n: int = 200) -> Dict[str, Any]:
-    """Blocking work: read the JSONL, aggregate, and shape the payload."""
+             now: datetime, recent_n: int = 200, default_tz: str = "UTC") -> Dict[str, Any]:
+    """Blocking work: read the JSONL, aggregate, and shape the payload.
+
+    ``now`` is timezone-aware in the viewer's zone, so ``today`` starts at the
+    viewer's local midnight and daily buckets follow local days.
+    """
     records = _report.load_usage(data_dir)
     pricing = load_pricing(pricing_file)
     cutoff = _report.parse_period(period, now)
     records = _report.filter_period(records, cutoff)
     summary = _report.aggregate(records, pricing, cache_pct, now, cutoff)
-    series = build_series(records, pricing, cache_pct)
+    series = build_series(records, pricing, cache_pct, now.tzinfo or timezone.utc)
     recent = list(reversed(records))[:recent_n]
     return {
         "period": period,
         "cache_assumption_pct": cache_pct,
-        "as_of": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "as_of": now.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "timezone": str(now.tzinfo),
+        "default_timezone": str(_resolve_tz(None, default_tz)),
         "source": "https://platform.openai.com/docs/pricing ; https://docs.anthropic.com/en/docs/about-claude/pricing",
         "summary": summary,
         "series": series,
@@ -148,11 +167,11 @@ async def dashboard_data(request: Request) -> JSONResponse:
     except (TypeError, ValueError):
         cache_pct = 0.0
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(_resolve_tz(request.query_params.get("tz"), cfg.timezone))
     loop = asyncio.get_running_loop()
     try:
         payload = await loop.run_in_executor(
-            None, _collect, cfg.data_dir, cfg.pricing_file, period, cache_pct, now
+            None, _collect, cfg.data_dir, cfg.pricing_file, period, cache_pct, now, 200, cfg.timezone
         )
     except ValueError as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)

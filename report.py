@@ -28,6 +28,7 @@ import os
 import sys
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from app.pricing import ModelPricing, cost_for_model, load_pricing
 
@@ -320,12 +321,18 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--data-dir", default=os.environ.get("DATA_DIR") or "./data")
     p.add_argument("--backend", help="filter to a single backend name")
     p.add_argument("--models", help="comma-separated subset of OpenAI model names")
+    p.add_argument("--tz", default=os.environ.get("TIMEZONE") or "UTC",
+                   help="IANA timezone for 'today' (e.g. America/Chicago; default $TIMEZONE or UTC)")
     return p
 
 
 def main(argv: Optional[List[str]] = None) -> int:
     args = build_arg_parser().parse_args(argv)
-    now = datetime.now(timezone.utc)
+    try:
+        now = datetime.now(ZoneInfo(args.tz))
+    except (ZoneInfoNotFoundError, ValueError):
+        print(f"unknown timezone: {args.tz!r}", file=sys.stderr)
+        return 2
     try:
         cutoff = parse_period(args.period, now)
     except ValueError as exc:

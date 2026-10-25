@@ -93,6 +93,7 @@ All settings are environment variables (see `.env.example`):
 | `READ_TIMEOUT`            | `1800`                     | Per-read timeout for long inference (s)    |
 | `TAIL_BUFFER_BYTES`       | `8388608` (8 MiB)          | Rolling buffer used to read usage stats    |
 | `MAX_CONNECTIONS`         | `200`                      | Upstream connection ceiling                |
+| `TIMEZONE`                | `UTC`                      | IANA zone for "today", daily buckets and shown times (dashboard default; `report.py --tz` overrides) |
 
 ## Running the tests
 

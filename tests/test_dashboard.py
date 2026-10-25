@@ -55,3 +55,61 @@ def test_dashboard_data_has_cache_fields(logger_server):
         assert "base_cost" in m and "cached_cost" in m and "savings" in m and "measured_cost" in m
         assert m["base_cost"] >= m["cached_cost"]
         assert abs(m["savings"] - (m["base_cost"] - m["cached_cost"])) < 1e-5
+
+
+def test_today_uses_viewer_timezone(tmp_path):
+    """'today' starts at local midnight in the requested zone, not UTC midnight."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    from app.web import _collect
+    from conftest import PRICING_FILE
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    # 02:00Z on Oct 25 is 21:00 Oct 24 in Chicago (CDT, UTC-5); 14:00Z is 09:00 local.
+    lines = [
+        '{"timestamp":"2026-10-25T02:00:00.000Z","status":"completed","input_tokens":10,"output_tokens":1,"total_tokens":11}',
+        '{"timestamp":"2026-10-25T14:00:00.000Z","status":"completed","input_tokens":20,"output_tokens":2,"total_tokens":22}',
+    ]
+    (data_dir / "usage.jsonl").write_text("\n".join(lines) + "\n")
+
+    chicago_now = datetime(2026, 10, 25, 15, 0, tzinfo=ZoneInfo("UTC")).astimezone(ZoneInfo("America/Chicago"))
+    local = _collect(str(data_dir), PRICING_FILE, "today", 0.0, chicago_now)
+    assert local["summary"]["requests"] == 1
+    assert local["timezone"] == "America/Chicago"
+
+    utc_now = chicago_now.astimezone(ZoneInfo("UTC"))
+    assert _collect(str(data_dir), PRICING_FILE, "today", 0.0, utc_now)["summary"]["requests"] == 2
+
+    # Daily buckets follow local days.
+    days = [b["day"] for b in _collect(str(data_dir), PRICING_FILE, "all", 0.0, chicago_now)["series"]]
+    assert days == ["2026-10-24", "2026-10-25"]
+
+
+def test_dashboard_data_accepts_tz_param(logger_server):
+    base = logger_server["base_url"]
+    r = httpx.get(f"{base}/dashboard/data?period=today&tz=America/Chicago", timeout=20)
+    assert r.status_code == 200 and r.json()["timezone"] == "America/Chicago"
+    # Unknown zones fall back rather than erroring.
+    r = httpx.get(f"{base}/dashboard/data?period=today&tz=Not/AZone", timeout=20)
+    assert r.status_code == 200
+
+
+def test_configured_timezone_is_default(mock_ollama_url, tmp_path):
+    from app.main import create_app
+    from conftest import make_logger_config, start_uvicorn, stop_uvicorn
+
+    cfg = make_logger_config(mock_ollama_url, str(tmp_path / "data"), timezone="America/Chicago")
+    port, server, thread = start_uvicorn(create_app(cfg))
+    try:
+        base = f"http://127.0.0.1:{port}"
+        data = httpx.get(f"{base}/dashboard/data?period=today", timeout=20).json()
+        assert data["timezone"] == "America/Chicago"
+        assert data["default_timezone"] == "America/Chicago"
+        # A viewer's explicit choice overrides the configured default.
+        data = httpx.get(f"{base}/dashboard/data?period=today&tz=UTC", timeout=20).json()
+        assert data["timezone"] == "UTC"
+        assert data["default_timezone"] == "America/Chicago"
+    finally:
+        stop_uvicorn(server, thread)

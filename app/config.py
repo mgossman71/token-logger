@@ -54,6 +54,9 @@ class Config:
     tail_buffer_bytes: int
     # Pricing
     pricing_file: str
+    # IANA timezone for day boundaries ("today", daily buckets) and displayed
+    # times. The dashboard can override it per viewer.
+    timezone: str = "UTC"
 
     @property
     def usage_path(self) -> str:
@@ -76,4 +79,5 @@ class Config:
             max_keepalive_connections=_int("MAX_KEEPALIVE_CONNECTIONS", 60),
             tail_buffer_bytes=_int("TAIL_BUFFER_BYTES", 8 * 1024 * 1024),
             pricing_file=_str("PRICING_FILE", "pricing.json"),
+            timezone=_str("TIMEZONE", "UTC"),
         )

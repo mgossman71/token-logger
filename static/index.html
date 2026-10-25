@@ -76,6 +76,11 @@ tr.cheapest td{background:rgba(55,208,160,.08)}
           <option value="90">90%</option>
         </select>
       </label>
+      <label>Timezone
+        <select id="tz">
+          <option value="">Default</option>
+        </select>
+      </label>
       <button id="refresh">Refresh</button>
     </div>
   </header>
@@ -111,6 +116,24 @@ function fmtCompact(n){
 function fmtMoney(n){ if(n==null||isNaN(n)) return 'n/a'; return '$'+Number(n).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}); }
 function fmtRate(n){ if(n==null||isNaN(n)) return 'n/a'; return Number(n).toFixed(1); }
 function fmtDur(n){ if(n==null||isNaN(n)) return 'n/a'; return Number(n).toFixed(2); }
+// Timezone: '' = server default (TIMEZONE), otherwise an IANA zone. The zone
+// actually used comes back as data.timezone and drives all displayed times.
+const BROWSER_TZ=(function(){try{return Intl.DateTimeFormat().resolvedOptions().timeZone||'UTC';}catch(e){return 'UTC';}})();
+const TZ_CHOICES=['UTC','America/New_York','America/Chicago','America/Denver','America/Phoenix','America/Los_Angeles','America/Anchorage','Pacific/Honolulu','Europe/London','Europe/Berlin','Asia/Kolkata','Asia/Tokyo','Australia/Sydney'];
+let TZ='UTC', TZ_ABBR='UTC';
+function tzAbbr(z){try{return new Intl.DateTimeFormat('en-US',{timeZone:z,timeZoneName:'short'}).formatToParts(new Date()).find(function(p){return p.type==='timeZoneName';}).value;}catch(e){return z;}}
+(function initTz(){
+  const sel=$('tz');
+  const zones=TZ_CHOICES.indexOf(BROWSER_TZ)<0?[BROWSER_TZ].concat(TZ_CHOICES):TZ_CHOICES;
+  zones.forEach(function(z){const o=document.createElement('option');o.value=z;o.textContent=z+(z===BROWSER_TZ?' (browser)':'');sel.appendChild(o);});
+  let saved=''; try{saved=localStorage.getItem('tz')||'';}catch(e){}
+  if(saved&&zones.indexOf(saved)>=0) sel.value=saved;
+})();
+function fmtLocal(ts){
+  const d=new Date(ts); if(isNaN(d)) return '—';
+  const p={}; new Intl.DateTimeFormat('en-CA',{timeZone:TZ,year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'}).formatToParts(d).forEach(function(x){p[x.type]=x.value;});
+  return p.year+'-'+p.month+'-'+p.day+' '+p.hour+':'+p.minute+':'+p.second;
+}
 function statusText(c){ if(!c) return ''; return Object.keys(c).map(function(k){return k+' '+c[k];}).join(' · '); }
 
 async function load(){
@@ -119,7 +142,7 @@ async function load(){
   $('sub').textContent='Loading…';
   let data;
   try{
-    const r=await fetch('/dashboard/data?period='+encodeURIComponent(period)+'&cache='+$('cache').value,{cache:'no-store'});
+    const r=await fetch('/dashboard/data?period='+encodeURIComponent(period)+'&cache='+$('cache').value+($('tz').value?'&tz='+encodeURIComponent($('tz').value):''),{cache:'no-store'});
     if(!r.ok) throw new Error('HTTP '+r.status);
     data=await r.json();
   }catch(e){
@@ -132,11 +155,13 @@ async function load(){
 }
 
 function render(data){
+  TZ=data.timezone||'UTC'; TZ_ABBR=tzAbbr(TZ);
+  if(data.default_timezone) $('tz').options[0].textContent='Default ('+data.default_timezone+')';
   const s=data.summary||{}, tok=s.tokens||{input:0,output:0,total:0};
   const backends=[...new Set((s.backends||[]).map(function(b){return b.backend;}))];
   $('backend').textContent=backends.length?('('+backends.join(', ')+')'):'';
   const periodLabel=({today:'today','7d':'last 7 days','30d':'last 30 days','90d':'last 90 days',all:'all time'})[$('period').value]||$('period').value;
-  $('sub').textContent=(s.requests||0)+' requests · '+periodLabel+(data.as_of?(' · as of '+String(data.as_of).replace('T',' ').slice(0,19)+' UTC'):'');
+  $('sub').textContent=(s.requests||0)+' requests · '+periodLabel+(data.as_of?(' · as of '+fmtLocal(data.as_of)+' '+TZ_ABBR):'');
 
   $('kpis').innerHTML=[
     ['Requests',fmtInt(s.requests),statusText(s.status_counts)],
@@ -151,9 +176,9 @@ function render(data){
   const rc=data.recent||[];
   $('recentCount').textContent=rc.length?('('+rc.length+' shown)'):'';
   $('recentTable').innerHTML=rc.length
-    ?'<table><thead><tr><th>Time (UTC)</th><th>Model</th><th>Status</th><th>In</th><th>Out</th><th>Out tok/s</th><th>Dur s</th></tr></thead><tbody>'+
+    ?'<table><thead><tr><th>Time ('+esc(TZ_ABBR)+')</th><th>Model</th><th>Status</th><th>In</th><th>Out</th><th>Out tok/s</th><th>Dur s</th></tr></thead><tbody>'+
       rc.map(function(r){
-        const t=r.timestamp?new Date(r.timestamp).toISOString().replace('T',' ').slice(0,19)+' UTC':'—';
+        const t=r.timestamp?fmtLocal(r.timestamp):'—';
         return '<tr><td>'+t+'</td><td>'+esc(r.model)+'</td><td><span class="badge '+esc(r.status)+'">'+esc(r.status)+'</span></td><td class="num">'+fmtInt(r.input_tokens)+'</td><td class="num">'+fmtInt(r.output_tokens)+'</td><td class="num">'+fmtRate(r.output_tokens_per_second)+'</td><td class="num">'+fmtDur(r.duration_seconds)+'</td></tr>';
       }).join('')+
       '</tbody></table>'
@@ -201,6 +226,7 @@ function renderCost(s){
 
 $('refresh').addEventListener('click',load);
 $('period').addEventListener('change',load);
+$('tz').addEventListener('change',function(){try{localStorage.setItem('tz',$('tz').value);}catch(e){}load();});
 window.addEventListener('load',load);
 </script>
 </body>
